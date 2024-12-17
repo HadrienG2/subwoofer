@@ -6,8 +6,11 @@ edition = "2021"
 [dependencies]
 
 [dev-dependencies]
-criterion = "0.3"
-hwlocality = "1.0"
+criterion = "0.5"
+hwlocality = "1.0.0-alpha"
+pessimize = { version = "2.0", features = ["nightly"] }
+rand = "0.8.5"
+target-features = "0.1"
 
 [lib]
 bench = false
