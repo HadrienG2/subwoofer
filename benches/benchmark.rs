@@ -80,7 +80,7 @@ macro_rules! for_each_registers_and_ilp {
     ( $benchmark:ident ::< $t:ty >() => (criterion $criterion:expr, tname $tname:expr) ) => {
         #[cfg(feature = "allow_tiny_inputs")]
         for_each_registers_and_ilp!(
-            $benchmark::<$t>() => (criterion $criterion, tname $tname, inputregs [1, 2, 4, 8, 16, 32])
+            $benchmark::<$t>() => (criterion $criterion, tname $tname, inputregs [1, 2, 4, 8, 16])
         );
         #[cfg(not(feature = "allow_tiny_inputs"))]
         for_each_registers_and_ilp!(
@@ -88,11 +88,15 @@ macro_rules! for_each_registers_and_ilp {
             // and the highest ILP we target is 8. This ILP only works for platforms
             // with 32 registers, as it leaves no register left for input on platforms
             // with 16 registers. On those, the highest we can get is ILP4, which
-            // consumes 8 registers for accumulators and leaves 8 free for data.
+            // consumes 8 registers for accumulators and leaves 8 free for data
+            // and temporaries like square roots
             //
-            // Therefore, configurations with <8 inputs underuse CPU registers on all known
+            // Therefore, configurations with <4 inputs underuse CPU registers on all known
             // CPU platforms and are thus not very interesting to compile in.
-            $benchmark::<$t>() => (criterion $criterion, tname $tname, inputregs [8, 16, 32])
+            //
+            // Similarly, >=32 input registers make no sense because the largest
+            // platforms have 32 registers and we need some for accumulators
+            $benchmark::<$t>() => (criterion $criterion, tname $tname, inputregs [4, 8, 16])
         );
     };
     ( $benchmark:ident ::< $t:ty >() => (criterion $criterion:expr, tname $tname:expr, inputregs [ $($inputregs:literal),* ]) ) => {
@@ -106,7 +110,8 @@ macro_rules! for_each_registers_and_ilp {
             for_each_registers_and_ilp!(
                 // We need 2 regs per ILP lane (initial accumulator + current accumulator)
                 // and current hardware has at most 32 SIMD registers, so it does not
-                // make sense to compile for more than ILP8 at this point in time
+                // make sense to compile for ILP >= 16 at this point in time
+                // as we'd have no space left for input.
                 $benchmark::<$t, $inputregs>(&mut group) => ilp [1, 2, 4, 8]
             );
         })*
@@ -245,24 +250,23 @@ fn benchmark_ilp<T: FloatLike, const ILP: usize, const INPUT_REGISTERS: usize>(
 
     // Benchmark square root of positive numbers, followed by add/sub cycle
     //
-    // Square roots of negative numbers may or may not be emulated in
-    // software (due to errno shenanigans) and are thus not a good candidate
-    // for CPU microbenchmarking.
-    //
-    // This means that the addend that we use to introduce a dependency
-    // chain is always positive, so we need to flip between addition and
-    // subtraction to avoid unbounded growth.
-    #[cfg(feature = "bench_sqrt_positive_addsub")]
-    group.bench_with_input(
-        format!("{bench_name_prefix}/sqrt_positive_addsub"),
-        &(additive_accumulator_init, inputs),
-        |b, &(accumulator_init, inputs)| {
-            b.iter(
-                #[inline(always)]
-                move || sqrt_positive_addsub::<T, ILP, INPUT_REGISTERS>(accumulator_init, inputs),
-            )
-        },
-    );
+    // At least one extra register is used to hold the square root before
+    // add/sub, restricting available ILP
+    if ILP + 1 < processing_registers {
+        #[cfg(feature = "bench_sqrt_positive_addsub")]
+        group.bench_with_input(
+            format!("{bench_name_prefix}/sqrt_positive_addsub"),
+            &(additive_accumulator_init, inputs),
+            |b, &(accumulator_init, inputs)| {
+                b.iter(
+                    #[inline(always)]
+                    move || {
+                        sqrt_positive_addsub::<T, ILP, INPUT_REGISTERS>(accumulator_init, inputs)
+                    },
+                )
+            },
+        );
+    }
 
     // For multiplicative benchmarks, we're going to need to an extra
     // averaging operation, otherwise once we've multiplied by a subnormal
@@ -416,6 +420,9 @@ fn addsub<T: FloatLike, const ILP: usize, const INPUT_REGISTERS: usize>(
 /// Square roots of negative numbers may or may not be emulated in software (due
 /// to errno shenanigans) and are thus not a good candidate for CPU
 /// microbenchmarking.
+///
+/// Square roots must be stored in one temporary register before add/sub,
+/// therefore this computation consumes at least one extra register.
 #[cfg(feature = "bench_sqrt_positive_addsub")]
 #[inline(always)]
 fn sqrt_positive_addsub<T: FloatLike, const ILP: usize, const INPUT_REGISTERS: usize>(
@@ -510,7 +517,7 @@ fn fma_full_average<T: FloatLike, const ILP: usize, const INPUT_REGISTERS: usize
         );
         let inputs = inputs.as_ref();
         assert_eq!(INPUT_REGISTERS, inputs.len());
-        let inputs = std::array::from_fn::<T, INPUT_REGISTERS, _>(|i| inputs[i]);
+        let inputs = std::array::from_fn::<T, INPUT_REGISTERS, _>(|i| pessimize::hide(inputs[i]));
         let (factor_inputs, addend_inputs) = inputs.split_at(inputs.len() / 2);
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in &mut accumulators {
@@ -560,7 +567,7 @@ fn iter_full<T: FloatLike, const ILP: usize, const INPUT_REGISTERS: usize>(
         );
         let inputs = inputs.as_ref();
         assert_eq!(INPUT_REGISTERS, inputs.len());
-        let inputs = std::array::from_fn::<T, INPUT_REGISTERS, _>(|i| inputs[i]);
+        let inputs = std::array::from_fn::<T, INPUT_REGISTERS, _>(|i| pessimize::hide(inputs[i]));
         for elem in inputs {
             for acc in &mut accumulators {
                 iter(acc, elem);
@@ -601,7 +608,7 @@ fn iter_halves<T: FloatLike, const ILP: usize, const INPUT_REGISTERS: usize>(
         );
         let inputs = inputs.as_ref();
         assert_eq!(INPUT_REGISTERS, inputs.len());
-        let inputs = std::array::from_fn::<T, INPUT_REGISTERS, _>(|i| inputs[i]);
+        let inputs = std::array::from_fn::<T, INPUT_REGISTERS, _>(|i| pessimize::hide(inputs[i]));
         let (low_inputs, high_inputs) = inputs.split_at(inputs.len() / 2);
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in &mut accumulators {
