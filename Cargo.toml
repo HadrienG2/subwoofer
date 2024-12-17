@@ -3,6 +3,31 @@ name = "subnormal-bench"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Disable some of these features to speed up the build
+default = [
+    "bench_all",
+    "types_simd",
+]
+bench_all = [
+    "bench_addsub",
+    "bench_sqrt_positive_addsub",
+    "bench_average",
+    "bench_mul_average",
+    "bench_fma_multiplier_average",
+    "bench_fma_addend_average",
+    "bench_fma_full_average",
+]
+bench_addsub = []
+bench_sqrt_positive_addsub = []
+bench_average = []
+bench_mul_average = []
+bench_fma_multiplier_average = []
+bench_fma_addend_average = []
+bench_fma_full_average = []
+allow_tiny_inputs = []
+types_simd = []
+
 [dependencies]
 
 [dev-dependencies]
