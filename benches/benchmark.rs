@@ -99,7 +99,7 @@ fn benchmark_ilp<T: FloatLike, const ILP: usize>(
 ) {
     // Name this ILP configuration
     let ilp_name = if ILP == 1 {
-        "sequential".to_string()
+        "latency-bound".to_string()
     } else {
         format!("ilp{ILP}")
     };
