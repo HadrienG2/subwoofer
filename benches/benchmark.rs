@@ -17,7 +17,7 @@ use target_features::Architecture;
 ///
 /// Higher is more precise, but the benchmark measurement time in the default
 /// configuration is multipled by this factor
-const MAX_SUBNORMAL_CONFIGURATIONS: usize = 2;
+const MAX_SUBNORMAL_CONFIGURATIONS: usize = 8;
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     // Probe how much data that fits in L1, L2, ... and add a size that only
