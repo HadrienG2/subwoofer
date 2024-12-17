@@ -1,0 +1,23 @@
+[package]
+name = "subnormal-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.3"
+hwlocality = "1.0"
+
+[lib]
+bench = false
+
+[[bench]]
+name = "benchmark"
+harness = false
+
+[profile.release]
+# Good for perf profiling
+debug = "line-tables-only"
+# Reproducible performance at the cost of longer compile times
+codegen-units = 1
