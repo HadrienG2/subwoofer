@@ -678,6 +678,7 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             for acc in local_accumulators.iter_mut() {
                 iter(acc, factor, addend);
             }
+            // Need this barrier to prevent autovectorization
             local_accumulators = local_accumulators.hide();
         }
     } else {
@@ -693,6 +694,7 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             {
                 iter(acc, factor, addend);
             }
+            // Need this barrier to prevent autovectorization
             local_accumulators = local_accumulators.hide();
         }
         for ((&factor, &addend), acc) in factor_remainder
@@ -722,6 +724,7 @@ fn iter_full<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 iter(acc, elem);
             }
         }
+        // Need this barrier to prevent autovectorization
         local_accumulators = local_accumulators.hide();
     } else {
         let chunks = inputs.chunks_exact(ILP);
@@ -730,6 +733,7 @@ fn iter_full<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             for (&elem, acc) in chunk.iter().zip(local_accumulators.iter_mut()) {
                 iter(acc, elem);
             }
+            // Need this barrier to prevent autovectorization
             local_accumulators = local_accumulators.hide();
         }
         for (&elem, acc) in remainder.iter().zip(local_accumulators.iter_mut()) {
@@ -759,6 +763,7 @@ fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             for acc in local_accumulators.iter_mut() {
                 high_iter(acc, high_elem);
             }
+            // Need this barrier to prevent autovectorization
             local_accumulators = local_accumulators.hide();
         }
     } else {
@@ -773,6 +778,7 @@ fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             for (&high_elem, acc) in high_chunk.iter().zip(local_accumulators.iter_mut()) {
                 high_iter(acc, high_elem);
             }
+            // Need this barrier to prevent autovectorization
             local_accumulators = local_accumulators.hide();
         }
         for (&low_elem, acc) in low_remainder.iter().zip(local_accumulators.iter_mut()) {
