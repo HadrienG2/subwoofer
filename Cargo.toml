@@ -19,8 +19,8 @@ default = ["check"]
 check = [
     "bench_addsub",               # ADD/SUB
     "bench_sqrt_positive_addsub", # Includes SQRT
-    "bench_mul_average",          # Includes MUL with subnormal inputs and outputs
-    "bench_fma_full_average",     # Includes FMA with subnormal inputs and outputs
+    "bench_mul_average",          # Includes MUL
+    "bench_fma_full_average",     # Includes FMA
 ]
 
 # Enable this feature when you want to precisely know when hardware operations
@@ -41,7 +41,7 @@ bench_all = [
     "bench_average",                 # ADD x%subnormal -> MUL, subtract from following
     "bench_mul_average",             # average + MUL
     "bench_fma_multiplier_average",  # average + FMA with x%subnormal multiplier, normal addend & result
-    "bench_fma_addend_average",      # average + FMA with x%subnormal addend, normal addend & result
+    "bench_fma_addend_average",      # average + FMA with x%subnormal addend, normal multiplier & result
     "bench_fma_full_average",        # average + FMA with x%subnormal multiplier and addend, x²%subnormal result
 ]
 

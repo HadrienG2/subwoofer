@@ -21,7 +21,7 @@ use target_features::Architecture;
 /// configuration is multipled accordingly.
 const MAX_SUBNORMAL_CONFIGURATIONS: usize = const {
     if cfg!(feature = "more_subnormal_frequencies") {
-        20 // 5% granularity
+        16 // 6.25% granularity
     } else {
         4 // 25% granularity
     }
