@@ -37,9 +37,9 @@ measure = [
 # Full set of supported microbenchmarks
 bench_all = [
     "bench_addsub",                  # ADD/SUB with x%subnormal input, normal result
-    "bench_sqrt_positive_addsub",    # addsub + SQRT with x%subnormal input&result
+    "bench_sqrt_positive_addsub",    # addsub + SQRT with x%subnormal input & result
     "bench_average",                 # ADD x%subnormal -> MUL, subtract from following
-    "bench_mul_average",             # average + MUL
+    "bench_mul_average",             # average + MUL with x%subnormal input & result
     "bench_fma_multiplier_average",  # average + FMA with x%subnormal multiplier, normal addend & result
     "bench_fma_addend_average",      # average + FMA with x%subnormal addend, normal multiplier & result
     "bench_fma_full_average",        # average + FMA with x%subnormal multiplier and addend, x²%subnormal result
