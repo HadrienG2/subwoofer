@@ -29,11 +29,12 @@ quantify = [
     "bench_sqrt_positive_addsub",    # addsub + SQRT with subnormal input&result
     "bench_average",                 # ADD subnormal -> MUL, subtract from following
     "bench_mul_average",             # average + MUL
-    "bench_fma_multiplier_average",  # average + FMA with subnormal multiplier, normal result
-    "bench_fma_addend_average",      # average + FMA with subnormal addend, normal result
+    "bench_fma_multiplier_average",  # average + FMA with subnormal multiplier, normal addend & result
+    "bench_fma_addend_average",      # average + FMA with subnormal addend, normal addend & result
     "bench_fma_full_average",        # average + FMA with subnormal multiplier, addend & result
-                                     #           (at square root of subnormal input frequency)
-    "more_subnormal_frequencies",    # Check more subnormal frequencies
+                                     #           (frequency at which both inputs and output are subnormal
+                                     #            = square of subnormal input frequency)
+    "more_subnormal_frequencies",    # Check more subnormal occurence frequencies
 ]
 
 # Control which benchmarks are built in a fine-grained ways. Lets you speed up
@@ -69,9 +70,9 @@ more_ilp_configurations = []
 # expense of a large increase in compilation and execution time.
 more_data_sources = []
 
-# By default, we only check what happens with all-normal input, 50% of
-# subnormals, and 100% of subnormals. Enable this feature to check what happens
-# at more fine-grained frequencies of subnormal occurence.
+# By default, we only check what happens with
+# [0, 25, 50, 75, 100]% of subnormal inputs. Enable this feature to
+# check what happens at more fine-grained frequencies of subnormal inputs.
 #
 # This lets you get insight into the implementation of subnormals and its
 # bottlenecks at the CPU microarchitacture level:
