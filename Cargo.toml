@@ -1,23 +1,43 @@
 [package]
-name = "subnormal-bench"
+name = "subwoofer"
 version = "0.1.0"
 edition = "2021"
 
 [features]
-# Disable some of these features to speed up the build
+# Default benchmark set is enough to qualitatively tell which hardware
+# operations are affected by subnormals, but not to precisely quantify how
+# much/when they are affected.
+#
+# Use the bench_all feature if you are interested in measuring that, at the
+# expense of more compilation and execution time.
+#
+# If you are running this on a hardware which you don't have permanent access
+# to, consider --all-features to check everything that the benchmark can
+# possibly measure, at the expense of extremely long compilation and execution
+# time (multiple days of execution).
 default = [
-    "bench_all",
-    "types_simd",
+    "bench_addsub",               # ADD/SUB
+    "bench_sqrt_positive_addsub", # Includes SQRT
+    "bench_mul_average",          # Includes MUL with subnormal inputs and outputs
+    "bench_fma_full_average",     # Includes FMA with subnormal inputs and outputs
 ]
-bench_all = [
-    "bench_addsub",
-    "bench_sqrt_positive_addsub",
-    "bench_average",
-    "bench_mul_average",
-    "bench_fma_multiplier_average",
-    "bench_fma_addend_average",
-    "bench_fma_full_average",
+
+# Enable this feature when you want to be able to precisely know when hardware
+# operations are affected by subnormals, and how bad the impact can get.
+quantify = [
+    "bench_addsub",                  # ADD/SUB with subnormal input, normal result
+    "bench_sqrt_positive_addsub",    # addsub + SQRT with subnormal input&result
+    "bench_average",                 # ADD subnormal -> MUL, subtract from following
+    "bench_mul_average",             # average + MUL
+    "bench_fma_multiplier_average",  # average + FMA with subnormal multiplier, normal result
+    "bench_fma_addend_average",      # average + FMA with subnormal addend, normal result
+    "bench_fma_full_average",        # average + FMA with subnormal multiplier, addend & result
+                                     #           (at square root of subnormal input frequency)
+    "more_subnormal_frequencies",    # Check more subnormal frequencies
 ]
+
+# Control which benchmarks are built in a fine-grained ways. Lets you speed up
+# compilation when debugging one benchmark. Use with --no-default-features.
 bench_addsub = []
 bench_sqrt_positive_addsub = []
 bench_average = []
@@ -25,8 +45,68 @@ bench_mul_average = []
 bench_fma_multiplier_average = []
 bench_fma_addend_average = []
 bench_fma_full_average = []
-allow_tiny_inputs = []
-types_simd = []
+
+# By default, we only run benchmarks with no instruction-level parallelism
+# (always latency-bound), with ~maximal ILP (hopefully throughput-bound), and
+# with half the maximal ILP (as a sanity check, see below).
+#
+# This feature lets you cover all power-of-two degrees of ILP instead. Use it
+# when you observe that the intermediate ILP configuration runs faster than the
+# maximal ILP configuration, which suggests that the maximal ILP configuration
+# is running into a microarchitectural bottleneck e.g. it trashes the CPU's
+# instruction cache because there is too much code. In this situation, it is
+# better to try all ILP configurations.
+#
+# The price to pay is a large increase in execution time.
+more_ilp_configurations = []
+
+# By default, we only run benchmarks from data in the L1 cache, because that's
+# where we expect the maximal subnormal impact outside of perhaps the
+# in-registers configuration, and it's less artificial and less likely to be
+# messed up by CPU µarch cleverness than the in-registers configuration.
+#
+# Use this feature to test at all levels of the memory hierarchy instead, at the
+# expense of a large increase in compilation and execution time.
+more_data_sources = []
+
+# By default, we only check what happens with all-normal input, 50% of
+# subnormals, and 100% of subnormals. Enable this feature to check what happens
+# at more fine-grained frequencies of subnormal occurence.
+#
+# This lets you get insight into the implementation of subnormals and its
+# bottlenecks at the CPU microarchitacture level:
+#
+# - If overhead is maximal at high frequencies, it suggests that the extra costs
+#   of processing subnormals in the CPU backend predominate.
+# - If overhead is maximal around 50%, it suggests that the CPU's float
+#   processing logic starts with a subnormal/normal branch, whose misprediction
+#   costs predominate.
+# - If overhead is maximal at lower frequencies, then brutally drops, it
+#   indicates that the CPU's fallback logic for handling subnormals can also
+#   handle normal numbers, and the manufacturer exploited this to avoid the
+#   aforementioned branch predictor trashing effects by staying in fallback mode
+#   when the frequency of subnormals occurence is higher than a threshold.
+#
+# The price to pay is a large increase in execution time.
+more_subnormal_frequencies = []
+
+# By default, we only check subnormal behavior in scalars.
+#
+# Enable this feature to also check vectors of all-normals or all-subnormals.
+# This lets you check if the subnormal fallback logic is vectorized or scalar.
+#
+# The price to pay is a large increase in compilation and execution time.
+simd = []
+
+# By default, we start at the maximal input sizes that fit in CPU registers,
+# which saves a bit of compilation and execution time.
+#
+# Enable this feature if you want to know if something special happens when the
+# number of benchmark inputs is tiny, which may make it easier for the CPU to
+# individually flag them as normal or subnormal.
+#
+# The price to pay is a moderate increase in compilation and execution time.
+tiny_inputs = []
 
 [dependencies]
 
