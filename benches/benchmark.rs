@@ -34,7 +34,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let smallest_data_cache_sizes = cache_stats.smallest_data_cache_sizes();
     let max_size_to_fit = |cache_size: u64| cache_size / 2;
     let min_size_to_overflow = |cache_size: u64| cache_size * 8;
-    let interesting_data_sizes = if cfg!(feature = "more_data_sources") {
+    let interesting_data_sizes = if cfg!(feature = "more_memory_data_sources") {
         smallest_data_cache_sizes
             .iter()
             .copied()
@@ -90,7 +90,7 @@ macro_rules! for_each_ilp {
 
 /// Benchmark a set of ILP configurations for a given scalar/SIMD type, using
 /// input from CPU registers
-#[cfg(feature = "more_data_sources")]
+#[cfg(feature = "register_data_sources")]
 macro_rules! for_each_registers_and_ilp {
     ( $benchmark:ident ::< $t:ty >() => (criterion $criterion:expr, tname $tname:expr) ) => {
         #[cfg(feature = "tiny_inputs")]
@@ -152,13 +152,13 @@ macro_rules! for_each_registers_and_ilp {
 #[inline(never)] // Trying to make perf profiles look nicer
 fn benchmark_type<T: Input>(c: &mut Criterion, tname: &str, interesting_data_sizes: &[usize]) {
     // Benchmark with input data that fits in CPU registers
-    #[cfg(feature = "more_data_sources")]
+    #[cfg(feature = "register_data_sources")]
     for_each_registers_and_ilp!(benchmark_ilp_registers::<T>() => (criterion c, tname tname));
 
     // Benchmark with input data that fits in L1, L2, ... all the way to RAM
     for (idx, &data_size) in interesting_data_sizes.iter().enumerate() {
         // Set up criterion for this dataset configuration
-        let data_source = if cfg!(feature = "more_data_sources") {
+        let data_source = if cfg!(feature = "more_memory_data_sources") {
             if idx < interesting_data_sizes.len() - 1 {
                 format!("L{}cache", idx + 1)
             } else {
@@ -181,7 +181,7 @@ fn benchmark_type<T: Input>(c: &mut Criterion, tname: &str, interesting_data_siz
 
 /// Benchmark all scalar or SIMD configurations for a floating-point type, using
 /// inputs from CPU registers
-#[cfg(feature = "more_data_sources")]
+#[cfg(feature = "register_data_sources")]
 #[inline(never)] // Trying to make perf profiles look nicer
 fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: usize>(
     group: &mut BenchmarkGroup<WallTime>,
@@ -701,7 +701,7 @@ trait Input:
             };
         }
     }
-    #[cfg(feature = "more_data_sources")]
+    #[cfg(feature = "register_data_sources")]
     fn generate_positive_inputs_exact<const N: usize>(num_subnormals: usize) -> [Self; N] {
         let normal = Self::normal_sampler();
         let subnormal = Self::subnormal_sampler();
