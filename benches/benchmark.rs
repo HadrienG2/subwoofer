@@ -338,7 +338,7 @@ fn benchmark_ilp_memory<T: Input, const ILP: usize>(
         // On CPU architectures without memory operands, we need one extra CPU
         // register to load memory inputs even in the addsub benchmark.
         let mut available_registers = MIN_FLOAT_REGISTERS;
-        if HAS_MEMORY_OPERANDS {
+        if !HAS_MEMORY_OPERANDS {
             available_registers -= 1;
         }
 
@@ -667,6 +667,7 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     target: T,
     inputs: Inputs,
 ) {
+    let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
     let (factor_inputs, addend_inputs) = inputs.split_at(inputs.len() / 2);
     let iter = |acc: &mut T, factor, addend| {
@@ -674,9 +675,10 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     };
     if Inputs::MUST_SHARE {
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
-            for acc in accumulators.iter_mut() {
+            for acc in local_accumulators.iter_mut() {
                 iter(acc, factor, addend);
             }
+            local_accumulators = local_accumulators.hide();
         }
     } else {
         let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -687,19 +689,21 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             for ((&factor, &addend), acc) in factor_chunk
                 .iter()
                 .zip(addend_chunk)
-                .zip(accumulators.iter_mut())
+                .zip(local_accumulators.iter_mut())
             {
                 iter(acc, factor, addend);
             }
+            local_accumulators = local_accumulators.hide();
         }
         for ((&factor, &addend), acc) in factor_remainder
             .iter()
             .zip(addend_remainder)
-            .zip(accumulators.iter_mut())
+            .zip(local_accumulators.iter_mut())
         {
             iter(acc, factor, addend);
         }
     }
+    *accumulators = local_accumulators;
 }
 
 /// Benchmark skeleton that processes the full input identically
@@ -710,25 +714,29 @@ fn iter_full<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     inputs: Inputs,
     mut iter: impl FnMut(&mut T, T),
 ) {
+    let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
     if Inputs::MUST_SHARE {
         for &elem in inputs {
-            for acc in accumulators.iter_mut() {
+            for acc in local_accumulators.iter_mut() {
                 iter(acc, elem);
             }
         }
+        local_accumulators = local_accumulators.hide();
     } else {
         let chunks = inputs.chunks_exact(ILP);
         let remainder = chunks.remainder();
         for chunk in chunks {
-            for (&elem, acc) in chunk.iter().zip(accumulators.iter_mut()) {
+            for (&elem, acc) in chunk.iter().zip(local_accumulators.iter_mut()) {
                 iter(acc, elem);
             }
+            local_accumulators = local_accumulators.hide();
         }
-        for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
+        for (&elem, acc) in remainder.iter().zip(local_accumulators.iter_mut()) {
             iter(acc, elem);
         }
     }
+    *accumulators = local_accumulators;
 }
 
 /// Benchmark skeleton that treats halves of the input differently
@@ -740,16 +748,18 @@ fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     mut low_iter: impl FnMut(&mut T, T),
     mut high_iter: impl FnMut(&mut T, T),
 ) {
+    let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
     let (low_inputs, high_inputs) = inputs.split_at(inputs.len() / 2);
     if Inputs::MUST_SHARE {
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
-            for acc in accumulators.iter_mut() {
+            for acc in local_accumulators.iter_mut() {
                 low_iter(acc, low_elem);
             }
-            for acc in accumulators.iter_mut() {
+            for acc in local_accumulators.iter_mut() {
                 high_iter(acc, high_elem);
             }
+            local_accumulators = local_accumulators.hide();
         }
     } else {
         let low_chunks = low_inputs.chunks_exact(ILP);
@@ -757,20 +767,22 @@ fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         let low_remainder = low_chunks.remainder();
         let high_remainder = high_chunks.remainder();
         for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
-            for (&low_elem, acc) in low_chunk.iter().zip(accumulators.iter_mut()) {
+            for (&low_elem, acc) in low_chunk.iter().zip(local_accumulators.iter_mut()) {
                 low_iter(acc, low_elem);
             }
-            for (&high_elem, acc) in high_chunk.iter().zip(accumulators.iter_mut()) {
+            for (&high_elem, acc) in high_chunk.iter().zip(local_accumulators.iter_mut()) {
                 high_iter(acc, high_elem);
             }
+            local_accumulators = local_accumulators.hide();
         }
-        for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
+        for (&low_elem, acc) in low_remainder.iter().zip(local_accumulators.iter_mut()) {
             low_iter(acc, low_elem);
         }
-        for (&high_elem, acc) in high_remainder.iter().zip(accumulators.iter_mut()) {
+        for (&high_elem, acc) in high_remainder.iter().zip(local_accumulators.iter_mut()) {
             high_iter(acc, high_elem);
         }
     }
+    *accumulators = local_accumulators;
 }
 
 // --- Data abstraction layer ---
