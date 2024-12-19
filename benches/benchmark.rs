@@ -353,8 +353,17 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     // Generate accumulator initial values and averaging targets
     let mut rng = rand::thread_rng();
     let normal_sampler = T::normal_sampler();
-    let additive_accumulator_init =
-        std::array::from_fn::<_, ILP, _>(|_| T::splat(100.0) * normal_sampler(&mut rng));
+    // For additive random walks, a large initial accumulator value maximally
+    // protects against descending into subnormal range as the accumulator value
+    // gets smaller, and a small initial accumulator value maximally protects
+    // against roundoff error as the accumulator value gets bigger. Both could
+    // theoretically affect arithmetic perf on hypothetical Sufficiently Smart
+    // Hardware from the future, so we protect against both equally.
+    let additive_accumulator_init = std::array::from_fn::<_, ILP, _>(|_| {
+        T::splat(2.0f32.powi((T::MANTISSA_DIGITS / 2) as i32)) * normal_sampler(&mut rng)
+    });
+    // For multiplicative random walks, accumulators close to 1 maximally
+    // protect against exponent overflow and underflow.
     let averaging_accumulator_init = std::array::from_fn::<_, ILP, _>(|_| normal_sampler(&mut rng));
     let average_target = normal_sampler(&mut rng);
 
@@ -859,12 +868,48 @@ trait Input:
     + Sub<Output = Self>
     + SubAssign
 {
-    // Given a random distribution of random numbers (distributed between 0.5
-    // and 2.0 to reduce risk of overflow, underflow, etc) and the random
-    // distribution of all subnormal numbers for a type, set up a random
-    // positive number generator that yields a certain amount of subnormals.
+    /// Random distribution of positive normal IEEE-754 floats
+    ///
+    /// Our normal inputs follow the distribution of 2.0.pow(u), where u follows
+    /// a uniform distribution from -1 to 1. We use this distribution because it
+    /// has several good properties:
+    ///
+    /// - The numbers are close to 1, which is the optimum range for
+    ///   floating-point arithmetic:
+    ///     * Starting from a value of order of magnitude 2^(MANTISSA_DIGITS/2),
+    ///       we can randomly add and subtract numbers close to 1 for a long
+    ///       time before we run into significant precision issues (due to the
+    ///       accumulator becoming too large) or cancelation/underflow issues
+    ///       (due to the accumulator becoming too small)
+    ///     * Starting from a value of order of magnitude 1, we can multiply or
+    ///       divide by values close to 1 for a long time before hitting
+    ///       exponent overflow or underflow issues.
+    /// - The particular distribution chosen between 0.5 to 2.0 additionally
+    ///   ensures that repeatedly multiplying by numbers from this distribution
+    ///   results in a random walk: an accumulator that is repeatedly multiplied
+    ///   by such values should oscillates around its initial value in
+    ///   multiplicative steps of at most * 2.0 or / 2.0 per iteration, with low
+    ///   odds of getting very large or very small if the RNG is working
+    ///   correctly. If the accumulator starts close to 1, we are best protected
+    ///   from exponent overflow and underflow during this walk.
+    ///
+    /// For SIMD types, we generate a vector of such floats.
     fn normal_sampler() -> impl Fn(&mut ThreadRng) -> Self;
+
+    /// Random distribution of positive subnormal floats
+    ///
+    /// These values are effectively treated as zeros by all of our current
+    /// benchmarks, therefore their exact distribution does not matter at this
+    /// point in time. We should just strive to evenly cover the space of all
+    /// possible subnormals, i.e. generate a subnormal value with uniformly
+    /// distributed random mantissa bits.
+    ///
+    /// For SIMD types, we generate a vector of such floats.
     fn subnormal_sampler() -> impl Fn(&mut ThreadRng) -> Self;
+
+    /// Fill up `target` buffer with positive values that have probability
+    /// `subnormal_probability` of being taken from `subnormal_sampler`, and are
+    /// otherwise taken from `normal_sampler`.
     fn generate_positive_inputs(target: &mut [Self], subnormal_probability: f32) {
         let mut rng = rand::thread_rng();
         let normal = Self::normal_sampler();
@@ -877,6 +922,12 @@ trait Input:
             };
         }
     }
+
+    /// Generate an array of values of which exactly `num_subnormals` values are
+    /// taken from `subnormal_sampler`. The remaining values are taken from
+    /// `normal_sampler` instead.
+    ///
+    /// The subnormal values are randomly distributed in the output array.
     #[cfg(feature = "register_data_sources")]
     fn generate_positive_inputs_exact<const N: usize>(num_subnormals: usize) -> [Self; N] {
         let normal = Self::normal_sampler();
@@ -893,7 +944,8 @@ trait Input:
         result
     }
 
-    // We're also gonna need some float ops not exposed via standard traits
+    // We're also gonna need some float data & ops not exposed via std traits
+    const MANTISSA_DIGITS: u32;
     fn splat(x: f32) -> Self;
     fn mul_add(self, factor: Self, addend: Self) -> Self;
     fn sqrt(self) -> Self;
@@ -901,14 +953,16 @@ trait Input:
 //
 impl Input for f32 {
     fn normal_sampler() -> impl Fn(&mut ThreadRng) -> Self {
-        let dist = Uniform::new(0.5, 2.0);
-        move |rng| rng.sample(dist)
+        let dist = Uniform::new(-1.0, 1.0);
+        move |rng| 2.0f32.powf(rng.sample(dist))
     }
 
     fn subnormal_sampler() -> impl Fn(&mut ThreadRng) -> Self {
         let dist = Uniform::new(2.0f32.powi(-149), 2.0f32.powi(-126));
         move |rng| rng.sample(dist)
     }
+
+    const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
 
     #[inline(always)]
     fn splat(x: f32) -> Self {
@@ -928,14 +982,16 @@ impl Input for f32 {
 //
 impl Input for f64 {
     fn normal_sampler() -> impl Fn(&mut ThreadRng) -> Self {
-        let dist = Uniform::new(0.5, 2.0);
-        move |rng| rng.sample(dist)
+        let dist = Uniform::new(-1.0, 1.0);
+        move |rng| 2.0f64.powf(rng.sample(dist))
     }
 
     fn subnormal_sampler() -> impl Fn(&mut ThreadRng) -> Self {
         let dist = Uniform::new(2.0f64.powi(-1074), 2.0f64.powi(-1022));
         move |rng| rng.sample(dist)
     }
+
+    const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
 
     #[inline(always)]
     fn splat(x: f32) -> Self {
@@ -968,6 +1024,8 @@ where
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
+    const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
+
     #[inline(always)]
     fn splat(x: f32) -> Self {
         Simd::splat(x)
@@ -998,6 +1056,8 @@ where
         let sampler = f64::subnormal_sampler();
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
+
+    const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
 
     #[inline(always)]
     fn splat(x: f32) -> Self {
