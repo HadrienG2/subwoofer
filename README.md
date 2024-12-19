@@ -43,6 +43,21 @@ Other classic CPU microbenchmarking tips apply:
   But beware that this configuration also reduces the real-world applicability
   of your measurements.
 
+---
+
+You are also going to need `rustup` (see the [recommended toolchain installation
+procedure from the Rust project](https://www.rust-lang.org/learn/get-started))
+and the `libhwloc` C library. The latter should either be installed system-wide
+or be reachable via your `PKG_CONFIG_PATH`.
+
+On Unices like Linux and macOS, you can typically get a system-wide installation
+of `libhwloc` by installing a package named `hwloc`, `hwloc-devel`,
+`libhwloc-dev` or similar using your preferred package manager. Unfortunately,
+the packaging of `hwloc` is not consistent across package managers: some Linux
+distributions like Arch have a single package that bundles the CLI tools, the
+runtime libraries, and the files needed for building dependent binaries, whereas
+other Linux distributions package those bits separately.
+
 
 ## Running the benchmark
 
