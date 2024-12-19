@@ -111,13 +111,14 @@ more_subnormal_frequencies = []
 # The price to pay is a large increase in compilation and execution time.
 simd = []
 
-# By default, we start at the maximal input sizes that fit in CPU registers,
-# which saves a bit of compilation and execution time.
+# By default, CPU register inputs start at the maximum that is known to be
+# available for all benchmarks on all hardware architectures, which saves a bit
+# of compilation and execution time.
 #
 # Enable this feature if you want to know if something special happens when the
-# number of benchmark inputs is tiny, which may make it easier for the CPU to
-# individually flag them as normal or subnormal... but also increases the
-# relative overhead of benchmark loop management.
+# number of benchmark inputs is tiny (down to a single register), which may make
+# it easier for the CPU to individually flag them as normal or subnormal... and
+# also increases the relative overhead of benchmark loop management.
 #
 # The price to pay is a moderate increase in compilation and execution time.
 tiny_inputs = ["register_data_sources"]
