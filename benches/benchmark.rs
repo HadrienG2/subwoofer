@@ -562,8 +562,11 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         b.iter_custom(
             #[inline(always)]
             move |iters| {
-                // Hack to ensure inputs and accumulators are initially in
-                // registers, which hints the compiler into keeping it that way.
+                // This makes sure that the compiler treats each benchmark as
+                // its own computation (no abusive caching), and also has the
+                // beneficial side-effect of ensuring inputs and accumulators
+                // are initially in CPU registers, which hints the compiler into
+                // keeping them there.
                 let mut accumulators = accumulator_init.hide();
                 let inputs = inputs.hide();
 
@@ -571,8 +574,9 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 let start = Instant::now();
                 for _ in 0..iters {
                     // Note that there is no optimization barrier on inputs,
-                    // because the impact on codegen was too high when operating
-                    // on register inputs (lots of useless reg-reg moves).
+                    // because the impact on codegen was observed to be too high
+                    // when operating on register inputs (lots of useless
+                    // reg-reg moves).
                     //
                     // This means that we must be careful about invalid
                     // optimizations based on benchmark input reuse in the
