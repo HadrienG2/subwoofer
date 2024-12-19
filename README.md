@@ -165,68 +165,89 @@ at the time of writing.
 
 ## Analyzing the output
 
-To assess the impact of subnormals on arithmetic operation latency, check the
-benchmarks where `ilp` is "chained". To assess their impact on operation
-throughput, check benchmarks at the `ilp` when the measured performance is
-highest is absence of subnormals in the input.
+To study the impact of subnormals on latency-bound code, look into benchmark
+timings where `ilp` is "chained". These benchmarks are made of a single long
+dependency chain that does not allow the CPU parallelize execution over
+superscalar units, so their execution time is just the latency of a single
+operation multipled by the number of operations.
 
-The operation latency/throughput in (nano)seconds is the inverse of the
-throughput computed by Criterion in operations/second for the corresponding
-degree of ILP. Unfortunately, I did not find a way to have Criterion directly
-compute and display the time/operation in the command-line benchmark output...
+To study the impact of subnormals on throughput-bound code, look into benchmark
+timings at the `ilp` where the measured performance is highest for the operation
+of interest, in the input configuration where there is no subnormals. Bear in
+mind that given a sufficiently inefficient hardware subnormal fallback,
+operations on subnormal numbers can be latency-bound even though operations on
+normal numbers are throughput-bound.
 
-You can then get from the benchmarked operation's latency/throughput to an
-estimate of the underlying hardware operation's latency/throughput using the
-following calculations:
+For each benchmark, Criterion is configured to compute the throughput in
+operations/second. For the next analysis steps, you are going to need the
+average operation duration instead. To get it, simply invert the
+criterion-computed throughput.
 
-* The `addsub` benchmark directly provides the average of the
+---
+
+Once you have the average operation duration for latency-bound and
+throughput-bound benchmarks, you can estimate the underlying hardware
+operation's latency/throughput using the following calculations:
+
+* The `addsub` benchmark directly provides you with the average of the
   latencies/throughputs of ADD and SUB with a possibly subnormal operand. Those
   operations have the same latency and throughput on all hardware that I know
-  of, so I did not bother creating benchmarks that measures each separately.
-* By subtracting the latency/throughput of `addsub` from the matching figure of
-  merit in the `sqrt_positive_addsub` benchmark, you get the latency/throughput
-  of SQRT with a possibly subnormal operand.
+  of, so I did not bother creating benchmarks that measures them separately.
+* By subtracting the duration of `addsub` in one configuration from the duration
+  of `sqrt_positive_addsub` in the same configuration, you can estimate the
+  latency/throughput of SQRT with a possibly subnormal operand.
 * The `average` benchmark provides the latency/throughput of adding an
-  in-register constant followed by multiplying by another in-register constant.
+  in-register value followed by multiplying by another in-register constant.
   This does not directly translates to a hardware figure or merit, but we need
   it to interprete the next benchmarks.
-* By subtracting the latency/throughput of `average` from the matching figure of
-  merit in the next benchmarks, you get the latency/throughput of...
-    - `mul_average`: MUL by a possibly subnormal operand
+* By subtracting the duration of `average` in onde configuration from the
+  duration of another benchmark in the same configuration, you can estimate the
+  latency/throughput of...
+    - `mul_average`: MUL with a possibly subnormal operand
     - `fma_multiplier_average`: FMA with a possibly subnormal multiplier
     - `fma_addend_average`: FMA with a possibly subnormal addend
     - `fma_full_average`: FMA with possibly subnormal multiplier, addend and
       result (the frequency at which everything is subnormal is the square of
-      the frequency at which one individual input is subnormal).
+      the frequency at which individual inputs are subnormal).
 
-The tradeoff between the "Nregisters" and "L1cache" data sources is subtle. The
-former leads to a more artificial code pattern that increases the odds of CPU
-microarchitecture "cheating", but the latter requires a memory load that is
-unrelated to the FP arithmetic operation that we are trying to measure, and may
-bias the measurement a bit. This is why both data sources are included in the
-recommended `measure` configuration. If the results are only slightly different,
-the "Nregisters" output should be slightly more faithful to the impact of
-subnormal arithmetic on maximally optimized code. But if they are very
-different, you should trust the "L1cache" measurements more unless you are sure
-you know your CPU microarchitecture well enough to confidently assess that it is
-not overly optimizing for in-register inputs (by e.g. always predicting internal 
+---
+
+The highest impact will usually be observed for one of the fastest data sources,
+"Nregisters" and "L1cache". The nuance between these is subtle. "Nregisters",
+where all inputs are resident in CPU registers for the entire duration of the
+benchmark, is a more artificial code pattern that increases the odds of CPU
+microarchitecture "cheating" or otherwise behaving weirdly. But "L1cache"
+requires memory loads that are unrelated to the FP arithmetic operation that we
+are trying to measure, which may bias the measurement a bit. Both have their
+merit depending on the details of the target CPU architecture, which is why both
+data sources are included in the recommended `measure` configuration.
+
+If the resulting timings are only slightly different, the "Nregisters" output
+can be expected to be slightly more faithful to the impact of subnormal
+arithmetic on maximally optimized code. But if they are very different, you
+should probably trust the "L1cache" measurements more by default, unless you
+know your CPU microarchitecture well enough to convince yourself that it cannot
+overly optimizing for in-register inputs (by e.g. always predicting internal
 normal/subnormal branches correctly).
+
+---
 
 By comparing the subnormal overhead at different subnormal input frequencies,
 you can gain insight into how your CPU implements its subnormal fallback:
 
-* If overhead is maximal at high frequencies, it suggests that the extra costs
-  of processing subnormals in the CPU backend predominate.
-* If overhead is maximal around 50%, it suggests that the CPU's float processing
-  logic starts with a subnormal/normal branch, whose misprediction costs
-  predominate in this most unpredictable case.
-* If overhead is maximal at lower frequencies, then abruptly drops, it indicates
-  that the CPU's fallback logic for handling subnormals can also handle normal
-  numbers, and the CPU manufacturer exploited this to avoid the aforementioned
-  branch predictor trashing effects by staying in fallback mode as long as the
-  frequency of subnormals occurence is higher than a certain threshold.
+* If the observed overhead is maximal at high subnormal probability, it suggests
+  that the extra costs of processing subnormals in the CPU backend predominate.
+* If the overhead is maximal around 50%, it suggests that the CPU's float
+  processing logic starts with a subnormal/normal branch, whose misprediction
+  costs dominate in this most unpredictable case.
+* If the overhead is maximal at lower frequencies, then abruptly drops, it
+  suggests that the CPU's fallback logic for handling subnormals can also handle
+  normal numbers, and the CPU manufacturer took advantage of this to avoid the
+  aforementioned branch predictor trashing effects by remaining in the fallback
+  mode as long as the frequency of subnormals occurence is higher than a certain
+  threshold.
 
 And finally, by comparing results from different data types on the fastest data
-sources, you can assess some type-dependent limitations of the CPU's subnormal
+sources, you can detect any type-dependent limitations of the CPU's subnormal
 fallback: is it slower on double-precision operands? Does it serialize SIMD
-operations into scalar ones?
+operations into ones of narrower width?
