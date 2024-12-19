@@ -517,7 +517,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         // This benchmark suffers from more register pressure than other
         // averaging-based benchmarks because there is one more operand to load
         // from memory before the FMA, even on CPU architectures with memory
-        // operands (FMA can only accept 1 such operand).
+        // operands (FMA can only accept 1 memory operand).
         #[cfg(feature = "bench_fma_full_average")]
         if benchmark_name == "fma_full_average" {
             let aux_registers_except_op1 = aux_registers_average + 1;
