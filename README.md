@@ -66,9 +66,9 @@ arithmetic, the benchmarks operates in a huge combinatorial space. To keep the
 compilation and run time in check, the set of probed configurations is small by
 default, and can be controlled via cargo features.
 
-I will leave you check the Cargo.toml file for a full description of all
-available cargo features, but the following is a quick guide to the execution
-configurations that you will typically wish for.
+You can check the Cargo.toml file for a full description of all available cargo
+features, but the following is a quick guide to the execution configurations
+that you will typically wish for.
 
 ---
 
@@ -90,9 +90,8 @@ native speed even in the presence of subnormal inputs.
 
 If on the other hand your CPU's arithmetic performance does degrade in the
 presence of subnormal numbers, then in order to quantitavely assess the impact
-of the CPU's subnormal fallback for those operations, you can re-run the
-benchmark in a more detailed configuration that takes a lot more time to build
-and run:
+of the CPU's subnormal fallback for those operations, you can benchmark with a
+more extensive configuration that takes a lot more time to build and run:
 
 ```bash
 cargo bench --features measure
@@ -100,11 +99,11 @@ cargo bench --features measure
 
 ---
 
-To save on execution during interactive analysis, you can use criterion's
-regex-filtering mechanism to exclude some benchmarks from a run. For example, if
-you previously observed that the performance impact of subnormals does not seem
-to differ between f32 and f64, you can only run the benchmarks that take f32
-inputs like this:
+To save on execution time during interactive analysis, it is a good idea to use
+criterion's regex-filtering mechanism to exclude some benchmarks from a run. For
+example, if you previously observed that the performance impact of subnormals
+does not seem to differ between f32 and f64, you can only run the benchmarks
+that take f32 inputs like this:
 
 ```bash
 cargo bench --features measure -- f32
@@ -112,17 +111,17 @@ cargo bench --features measure -- f32
 
 If on the other hand you only have temporary access to the target hardware, you
 may alternatively go for the opposite approach of measuring everything that can
-possibly be measured, accumulating as much information as possible for the
-subsequent analysis. This can be done, at the expense of an enormous increase of
+possibly be measured, accumulating as much information as possible for later
+analysis. This can be done, at the expense of an enormous increase of
 compilation time and runtime (we're talking about runtimes of multiple days), by
-enabling all cargo features:
+enabling all the cargo features:
 
 ```bash
 cargo bench --all-features
 ```
 
-In that case, do not forget to make a backup of the `target/criterion` directory
-before you lose access to the hardware!
+If you go down that route, do not forget to make a backup of the
+`target/criterion` directory before you lose access to the hardware!
 
 
 ## Naming convention
@@ -190,15 +189,15 @@ following calculations:
 * The `average` benchmark provides the latency/throughput of adding an
   in-register constant followed by multiplying by another in-register constant.
   This does not directly translates to a hardware figure or merit, but we need
-  it to interprete other benchmark.
+  it to interprete the next benchmarks.
 * By subtracting the latency/throughput of `average` from the matching figure of
-  merit in the other benchmarks, you get the latency/throughput of...
+  merit in the next benchmarks, you get the latency/throughput of...
     - `mul_average`: MUL by a possibly subnormal operand
     - `fma_multiplier_average`: FMA with a possibly subnormal multiplier
     - `fma_addend_average`: FMA with a possibly subnormal addend
     - `fma_full_average`: FMA with possibly subnormal multiplier, addend and
-      result (the frequency at which everything is subnormal is the square
-      of the frequency at which inputs are subnormal).
+      result (the frequency at which everything is subnormal is the square of
+      the frequency at which one individual input is subnormal).
 
 The tradeoff between the "Nregisters" and "L1cache" data sources is subtle. The
 former leads to a more artificial code pattern that increases the odds of CPU
