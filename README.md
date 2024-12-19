@@ -14,7 +14,7 @@ number (which saturates the accumulator to +inf). Suggestions welcome!
 
 As of writing, this benchmark has only been rigorously checked for correctness
 on x86_64. But it has been designed with due consideration to other common
-microarchitectures, so given a week or two interactive access to an ARM or
+microarchitectures, so given a week or two of interactive access to an ARM or
 RISC-V machine with support for perf profiling, I think I should be able to
 validate it for those ISAs too.
 
@@ -97,31 +97,31 @@ more extensive configuration that takes a lot more time to build and run:
 cargo bench --features measure
 ```
 
----
-
-To save on execution time during interactive analysis, it is a good idea to use
-criterion's regex-filtering mechanism to exclude some benchmarks from a run. For
-example, if you previously observed that the performance impact of subnormals
-does not seem to differ between f32 and f64, you can only run the benchmarks
-that take f32 inputs like this:
+It is a good idea to use criterion's regex-filtering mechanism to exclude some
+benchmarks from this longer benchmark run. For example, if you have previously
+observed that the performance impact of subnormals is the same for f32 and f64,
+you can restrict execution to the benchmarks that take f32 inputs like this:
 
 ```bash
 cargo bench --features measure -- f32
 ```
 
+---
+
 If on the other hand you only have temporary access to the target hardware, you
-may alternatively go for the opposite approach of measuring everything that can
-possibly be measured, accumulating as much information as possible for later
-analysis. This can be done, at the expense of an enormous increase of
-compilation time and runtime (we're talking about runtimes of multiple days), by
-enabling all the cargo features:
+can alternatively go for the opposite approach of measuring everything that can
+possibly be measured, to accumulate as much data as possible for later analysis.
+This can be done, at the expense of an enormous increase of compilation and
+execution time (the benchmark will take several days to run), by enabling all
+the cargo features at once:
 
 ```bash
 cargo bench --all-features
 ```
 
-If you go down that route, do not forget to make a backup of the
-`target/criterion` directory before you lose access to the hardware!
+If you need to go down that route, do not forget to make a proper backup of the
+`target/criterion` directory as soon as possible, before you lose access to the
+hardware or run `cargo clean` without thinking twice!
 
 
 ## Naming convention
