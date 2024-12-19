@@ -225,14 +225,14 @@ observed for one of the two fastest data sources, "L1cache" and "Nregisters":
   inputs from the L1 CPU cache. But these memory accesses, which are unrelated
   to the FP arithmetic operation that we are trying to measure, may bias the
   measurement a bit, especially if the benchmark somehow manages to saturate the
-  CPU's address generation units or be bottlenecked by the L1 cache's latency
-  and bandwidth (these are thankfully unlikely on modern high-performance CPU
-  microarchitectures).
+  CPU's address generation units or to be bottlenecked by the L1 cache's latency
+  or bandwidth (these are all thankfully unlikely bottlenecks on modern
+  high-performance CPU microarchitectures).
 - To work around this, "Nregisters" uses a tiny set of data inputs that can stay
   resident in CPU registers for the entire duration of the benchmark. This is
   the fastest possible source of data on the CPU side, unlike the L1 cache it
-  cannot ever become a bottleneck. But there is a big price to pay for avoiding
-  the L1 cache like this:
+  cannot ever become a bottleneck. But there is a price to pay for avoiding the
+  L1 cache like this:
     * To constantly operate on the same tiny amount of data without compiler
       over-optimization, we need to apply more aggressive optimization barriers
       to the source Rust code. This may lead to slightly worse codegen, e.g.
@@ -257,7 +257,7 @@ Assuming you nonetheless want to analyze both...
 - If "Nregisters" is a bit faster than "L1cache" (say, 20% faster), its
   measurement might be more faithful to the impact of subnormal arithmetic on
   maximally optimized code because it is not polluted by memory loads, it
-  contains only ~free reg-reg moves and the desired arithmetic.
+  contains only the desired arithmetic and perhaps a few ~free reg-reg moves.
 - If "Nregisters" is a lot faster than "L1cache" (say, 2x faster), or even
   worse, significantly slower, you should disregard its output as suspicious by
   default unless you are ready to take the time to carefully cross-check that
