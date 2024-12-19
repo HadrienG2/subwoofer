@@ -100,11 +100,17 @@ cargo bench --features measure
 It is a good idea to use criterion's regex-filtering mechanism to exclude some
 benchmarks from this longer benchmark run. For example, if you have previously
 observed that the performance impact of subnormals is the same for f32 and f64,
-you can restrict execution to the benchmarks that take f32 inputs like this:
+you may want to only run the benchmarks that take f32 inputs like this:
 
 ```bash
 cargo bench --features measure -- f32
 ```
+
+You can remove some operations that are unaffected by subnormals from the
+benchmark using the same technique, but be sure to check out the "Analyzing the
+output" section of this README first: you may actually need to measure the
+performance of some operations in order to analyze the performance of other
+operations later on.
 
 ---
 
