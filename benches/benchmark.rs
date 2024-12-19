@@ -84,17 +84,18 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     {
         // FIXME: Mess around with cfg_if to better approximate actually
         //        supported SIMD instruction sets on non-x86 architectures
-        benchmark_type::<Simd<f32, 4>>(c, config, "f32x4");
-        benchmark_type::<Simd<f64, 2>>(c, config, "f64x2");
+        // Leading zeros works around poor criterion bench name sorting
+        benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
+        benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
         #[cfg(all(target_arch = "x86_64", target_feature = "avx"))]
         {
-            benchmark_type::<Simd<f32, 8>>(c, config, "f32x8");
-            benchmark_type::<Simd<f64, 4>>(c, config, "f64x4");
+            benchmark_type::<Simd<f32, 8>>(c, config, "f32x08");
+            benchmark_type::<Simd<f64, 4>>(c, config, "f64x04");
         }
         #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
         {
             benchmark_type::<Simd<f32, 16>>(c, config, "f32x16");
-            benchmark_type::<Simd<f64, 8>>(c, config, "f64x8");
+            benchmark_type::<Simd<f64, 8>>(c, config, "f64x08");
         }
     }
 }
@@ -164,9 +165,9 @@ macro_rules! for_each_registers_and_ilp {
             //
             // On platforms with 16 registers, the highest we can go is ILP8,
             // which consumes 8 registers for accumulators and leaves 8 free for
-            // inputs and temporaries like square roots.
+            // inputs and temporaries like operands or square roots.
             //
-            // 1-2 temporaries is enough for all the computations we're doing
+            // 3-4 temporaries is enough for all the computations we're doing
             // here, therefore, configurations with <4 inputs underuse registers
             // on all known CPUs. We thus don't compile them in by default to
             // save compilation time.
@@ -184,9 +185,10 @@ macro_rules! for_each_registers_and_ilp {
         $({
             // Name this input configuration
             let data_source_name = if $inputregs == 1 {
-                "1register".to_string()
+                // Leading zeros works around poor criterion bench name sorting
+                "01register".to_string()
             } else {
-                format!("{}registers", $inputregs)
+                format!("{:02}registers", $inputregs)
             };
 
             // Dispatch to ILP configurations
@@ -233,9 +235,10 @@ fn benchmark_type<T: Input>(c: &mut Criterion, common_config: CommonConfiguratio
         for ilp in (0..32usize.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
             // Set up a criterion group for the (type, benchmark, ilp) triplet
             let ilp_name = if ilp == 1 {
-                "no_ilp".to_string()
+                "chained".to_string()
             } else {
-                format!("ilp{ilp}")
+                // Leading zeros works around poor criterion bench name sorting
+                format!("ilp{ilp:02}")
             };
             let mut group = c.benchmark_group(format!("{tname}/{benchmark_name}/{ilp_name}"));
             let type_config = TypeConfiguration {
@@ -299,17 +302,14 @@ fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: us
         let inputs = T::generate_positive_inputs_exact::<INPUT_REGISTERS>(num_subnormals);
 
         // Name this input
-        let input_name =
-            format!("{data_source_name}/{num_subnormals}in{INPUT_REGISTERS}_subnormal");
+        let input_name = format!(
+            "{data_source_name}/{num_subnormals:0num_digits$}in{INPUT_REGISTERS}_subnormal",
+            // Leading zeros works around poor criterion bench name sorting
+            num_digits = INPUT_REGISTERS.ilog10() as usize
+        );
 
         // Run all the benchmarks on this input
-        benchmark_ilp::<_, _, ILP>(
-            group,
-            benchmark_name,
-            inputs,
-            &input_name,
-            MIN_FLOAT_REGISTERS - INPUT_REGISTERS,
-        );
+        benchmark_ilp::<_, _, ILP>(group, benchmark_name, inputs, &input_name);
     }
 }
 
@@ -331,25 +331,13 @@ fn benchmark_ilp_memory<T: Input, const ILP: usize>(
 
         // Name this input
         let input_name = format!(
-            "{data_source_name}/{:.0}%_subnormal",
+            // Leading zeros works around poor criterion bench name sorting
+            "{data_source_name}/{:03.0}%_subnormal",
             subnormal_probability * 100.0
         );
 
-        // On CPU architectures without memory operands, we need one extra CPU
-        // register to load memory inputs even in the addsub benchmark.
-        let mut available_registers = MIN_FLOAT_REGISTERS;
-        if !HAS_MEMORY_OPERANDS {
-            available_registers -= 1;
-        }
-
         // Run all the benchmarks on this input
-        benchmark_ilp::<_, _, ILP>(
-            group,
-            benchmark_name,
-            &*input_storage,
-            &input_name,
-            available_registers,
-        );
+        benchmark_ilp::<_, _, ILP>(group, benchmark_name, &*input_storage, &input_name);
     }
 }
 
@@ -361,7 +349,6 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     benchmark_name: &'static str,
     inputs: Inputs,
     input_name: &str,
-    available_registers: usize,
 ) {
     // Generate accumulator initial values and averaging targets
     let mut rng = rand::thread_rng();
@@ -376,29 +363,55 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     // ingests two inputs per operation.
     let num_inputs = inputs.as_ref().len();
     assert!(num_inputs >= 1);
-    let num_op_data_inputs = if Inputs::MUST_SHARE {
+    let num_operation_inputs = if Inputs::MUST_SHARE {
         num_inputs * ILP // Each input is sent to each ILP stream
     } else {
         num_inputs // Each ILP stream gets its own substream of the input
     } as u64;
-    group.throughput(Throughput::Elements(num_op_data_inputs));
+    group.throughput(Throughput::Elements(num_operation_inputs));
 
-    // Check if we should benchmark a certain ILP configuration
-    let should_check_ilp = |max_ilp: usize| {
-        // Round to lower power of two since we only benchmark at powers of two
-        let optimal_ilp = 1 << max_ilp.ilog2();
-        cfg!(feature = "more_ilp_configurations")
-            || ILP == 1
-            || ILP == optimal_ilp
-            || ILP == optimal_ilp / 2
+    // Check if we should benchmark a certain ILP configuration, knowing how
+    // much registers besides accumulators and register inputs are consumed when
+    // operating from register and memory inputs.
+    let should_check_ilp = |aux_registers_regop: usize, aux_registers_memop: usize| {
+        // First eliminate configurations that would spill to the stack
+        let non_accumulator_registers = if let Some(input_registers) = Inputs::REGISTER_FOOTPRINT {
+            input_registers + aux_registers_regop
+        } else {
+            aux_registers_memop
+        };
+        if ILP + non_accumulator_registers > MIN_FLOAT_REGISTERS {
+            return false;
+        }
+
+        // Unless the more_ilp_configurations feature is turned on, also
+        // eliminate configurations other than the minimum, maximum, and
+        // half-maximum ILP for memory operands.
+        if cfg!(feature = "more_ilp_configurations") {
+            true
+        } else {
+            let max_ilp_memop = MIN_FLOAT_REGISTERS - aux_registers_memop;
+            // Round to lower power of two since we only benchmark at powers of two
+            let optimal_ilp_memop = 1 << max_ilp_memop.ilog2();
+            ILP == 1 || ILP == optimal_ilp_memop || ILP == optimal_ilp_memop / 2
+        }
     };
+
+    // Most benchmarks take one input from registers or memory and use it
+    // directly as an operand to an arithmetic operation.
+    //
+    // If the input comes from memory, the number of available registers depends
+    // on whether the CPU ISA supports memory operands. If it doesn't, then an
+    // extra temporary register must be used for a memory load before the
+    // arithmetic operation can take place.
+    let aux_registers_direct_memop = (!HAS_MEMORY_OPERANDS) as usize;
 
     // Run the benchmark currently selected by benchmark_type's outer loop
     'select_benchmark: {
         // Benchmark addition and subtraction
         #[cfg(feature = "bench_addsub")]
         if benchmark_name == "addsub" {
-            if should_check_ilp(available_registers) {
+            if should_check_ilp(0, aux_registers_direct_memop) {
                 group.bench_with_input(
                     input_name,
                     &inputs,
@@ -410,22 +423,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
 
         // Benchmark square root of positive numbers, followed by add/sub cycle
         //
-        // On architectures with memory operands, we need one extra register
-        // with respect to addsub because one register is needed to hold the
-        // square roots before add/sub.
-        //
-        // On architectures without memory operands, if the input is from
-        // memory, then we don't need an extra register because we can just
-        // reuse the register that was used to load the memory input. We cannot
-        // do this when the input data comes from registers because we are going
-        // to reuse those inputs in subsequent benchmark runs.
+        // We always need one extra register to hold the square root before
+        // adding or subtracting it from the accumulator. But if the
+        // architecture doesn't support memory operands, we can reuse the one
+        // that was used for the memory load.
         #[cfg(feature = "bench_sqrt_positive_addsub")]
         if benchmark_name == "sqrt_positive_addsub" {
-            let mut max_ilp = available_registers;
-            if HAS_MEMORY_OPERANDS || !Inputs::FROM_MEMORY {
-                max_ilp -= 1;
-            }
-            if should_check_ilp(max_ilp) {
+            if should_check_ilp(1, 1) {
                 group.bench_with_input(
                     input_name,
                     &inputs,
@@ -435,16 +439,20 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             break 'select_benchmark;
         }
 
-        // For multiplicative benchmarks, we're going to need to an extra averaging
-        // operation, otherwise once we've multiplied by a subnormal we'll stay in
-        // subnormal range forever, and this prevents us from studying the effect of
-        // various subnormals occurence frequencies in the input stream.
+        // For multiplicative benchmarks, we're going to need to an extra
+        // averaging operation, otherwise once we've multiplied by a subnormal
+        // the accumulator stays in subnormal range forever, which get in the
+        // way of our goal of studying the effect of various subnormals
+        // occurence frequencies in the input stream.
         //
         // Two registers are used by the averaging (target + halving weight),
         // restricting available ILP for this benchmark.
+        let aux_registers_average = 2;
         {
-            let max_ilp = available_registers - 2;
-            if should_check_ilp(max_ilp) {
+            if should_check_ilp(
+                aux_registers_average,
+                aux_registers_average + aux_registers_direct_memop,
+            ) {
                 // First benchmark the averaging in isolation
                 #[cfg(feature = "bench_average")]
                 if benchmark_name == "average" {
@@ -456,7 +464,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                     break 'select_benchmark;
                 }
 
-                // Benchmark multiplication followed by averaging
+                // Benchmark multiplication -> averaging
                 #[cfg(feature = "bench_mul_average")]
                 if benchmark_name == "mul_average" {
                     group.bench_with_input(
@@ -471,7 +479,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                     break 'select_benchmark;
                 }
 
-                // Benchmark fma then averaging with possibly subnormal multiplier
+                // Benchmark fma with possibly subnormal multiplier -> averaging
                 #[cfg(feature = "bench_fma_multiplier_average")]
                 if benchmark_name == "fma_multiplier_average" {
                     group.bench_with_input(
@@ -486,7 +494,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                     break 'select_benchmark;
                 }
 
-                // Benchmark fma then averaging with possibly subnormal addend
+                // Benchmark fma with possibly subnormal addend -> averaging
                 #[cfg(feature = "bench_fma_addend_average")]
                 if benchmark_name == "fma_addend_average" {
                     group.bench_with_input(
@@ -503,17 +511,24 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             }
         }
 
-        // Benchmark fma then averaging with possibly subnormal multiplier _and_
-        // addend. This benchmark suffers from more register pressure than
-        // others averaging-based benchmarks because even on CPU architectures
-        // with memory operands FMA can only accept 1 such operand, therefore
-        // the benchmark is available in even less ILP configurations.
+        // Benchmark fma with possibly subnormal multiplier _and_ addend,
+        // followed by averaging.
+        //
+        // This benchmark suffers from more register pressure than other
+        // averaging-based benchmarks because there is one more operand to load
+        // from memory before the FMA, even on CPU architectures with memory
+        // operands (FMA can only accept 1 such operand).
         #[cfg(feature = "bench_fma_full_average")]
         if benchmark_name == "fma_full_average" {
-            let max_ilp = available_registers - 3;
-            if num_inputs >= 2 && should_check_ilp(max_ilp) {
+            let aux_registers_except_op1 = aux_registers_average + 1;
+            if num_inputs >= 2
+                && should_check_ilp(
+                    aux_registers_except_op1,
+                    aux_registers_except_op1 + aux_registers_direct_memop,
+                )
+            {
                 // Benchmark fma then averaging with possibly subnormal operands
-                group.throughput(Throughput::Elements(num_op_data_inputs / 2));
+                group.throughput(Throughput::Elements(num_operation_inputs / 2));
                 group.bench_with_input(
                     input_name,
                     &inputs,
@@ -798,8 +813,10 @@ trait InputSet<T: Input>: AsRef<[T]> + Borrow<[T]> + Copy {
     /// Make a copy that is unrelated in the eyes of the optimizer
     fn hide(self) -> Self;
 
-    /// Truth that this input comes from memory
-    const FROM_MEMORY: bool;
+    /// Floating-point registers that are reserved for this input
+    ///
+    /// None means that the input comes from cache or RAM.
+    const REGISTER_FOOTPRINT: Option<usize>;
 
     /// Truth that we must use the same input for each accumulator
     const MUST_SHARE: bool;
@@ -811,7 +828,7 @@ impl<T: Input, const N: usize> InputSet<T> for [T; N] {
         self.map(pessimize::hide)
     }
 
-    const FROM_MEMORY: bool = false;
+    const REGISTER_FOOTPRINT: Option<usize> = Some(N);
 
     const MUST_SHARE: bool = true;
 }
@@ -822,7 +839,7 @@ impl<T: Input> InputSet<T> for &[T] {
         pessimize::hide(self)
     }
 
-    const FROM_MEMORY: bool = true;
+    const REGISTER_FOOTPRINT: Option<usize> = None;
 
     const MUST_SHARE: bool = false;
 }
