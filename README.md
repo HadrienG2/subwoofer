@@ -200,7 +200,7 @@ operation's latency/throughput using the following calculations:
   in-register value followed by multiplying by another in-register constant.
   This does not directly translates to a hardware figure or merit, but we need
   it to interprete the next benchmarks.
-* By subtracting the duration of `average` in onde configuration from the
+* By subtracting the duration of `average` in one configuration from the
   duration of another benchmark in the same configuration, you can estimate the
   latency/throughput of...
     - `mul_average`: MUL with a possibly subnormal operand
@@ -215,19 +215,19 @@ operation's latency/throughput using the following calculations:
 The highest impact will usually be observed for one of the fastest data sources,
 "Nregisters" and "L1cache". The nuance between these is subtle. "Nregisters",
 where all inputs are resident in CPU registers for the entire duration of the
-benchmark, is a more artificial code pattern that increases the odds of CPU
-microarchitecture "cheating" or otherwise behaving weirdly. But "L1cache"
+benchmark, is a more artificial/uncommon code pattern that increases the odds of
+CPU microarchitecture "cheating" or otherwise behaving weirdly. But "L1cache"
 requires memory loads that are unrelated to the FP arithmetic operation that we
-are trying to measure, which may bias the measurement a bit. Both have their
-merit depending on the details of the target CPU architecture, which is why both
-data sources are included in the recommended `measure` configuration.
+are trying to measure, which may bias the measurement a bit. Both data sources 
+have their merit depending on the details of the target CPU microarchitecture,
+which is why both are included in the recommended `measure` configuration.
 
 If the resulting timings are only slightly different, the "Nregisters" output
 can be expected to be slightly more faithful to the impact of subnormal
 arithmetic on maximally optimized code. But if they are very different, you
 should probably trust the "L1cache" measurements more by default, unless you
-know your CPU microarchitecture well enough to convince yourself that it cannot
-overly optimizing for in-register inputs (by e.g. always predicting internal
+know your CPU microarchitecture well enough to be quite confident that it cannot
+overly optimize for in-register inputs (by e.g. always predicting internal
 normal/subnormal branches correctly).
 
 ---
@@ -239,15 +239,15 @@ you can gain insight into how your CPU implements its subnormal fallback:
   that the extra costs of processing subnormals in the CPU backend predominate.
 * If the overhead is maximal around 50%, it suggests that the CPU's float
   processing logic starts with a subnormal/normal branch, whose misprediction
-  costs dominate in this most unpredictable case.
+  costs dominate in this least predictable input configuration.
 * If the overhead is maximal at lower frequencies, then abruptly drops, it
   suggests that the CPU's fallback logic for handling subnormals can also handle
   normal numbers, and the CPU manufacturer took advantage of this to avoid the
-  aforementioned branch predictor trashing effects by remaining in the fallback
-  mode as long as the frequency of subnormals occurence is higher than a certain
+  aforementioned branch misprediction overhead by remaining in the fallback mode
+  as long as the frequency of subnormals occurence is higher than a certain
   threshold.
 
-And finally, by comparing results from different data types on the fastest data
+Finally, by comparing results from different data types on the fastest data
 sources, you can detect any type-dependent limitations of the CPU's subnormal
-fallback: is it slower on double-precision operands? Does it serialize SIMD
-operations into ones of narrower width?
+fallback: is it slower on double-precision operands? Does it "serialize" SIMD
+operations into scalar operations or SIMD operations of smaller width?
