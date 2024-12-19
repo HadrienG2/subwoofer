@@ -234,8 +234,8 @@ observed for one of the two fastest data sources, "L1cache" and "Nregisters":
   avoiding the L1 cache like this:
     * To constantly operate on the same tiny amount of data without compiler
       over-optimization, we need to apply very aggressive optimization barriers
-      to the source Rust code. This leads to the generation of some useless but
-      thankfully nearly-free register-to-register move instructions in the
+      to the source Rust code. This may lead to the generation of some useless
+      but thankfully nearly-free register-to-register move instructions in the
       output binary.
     * Because this code pattern is less common and the amount of input data is
       tiny, there is a higher chance that some CPUs will behave weirdly when

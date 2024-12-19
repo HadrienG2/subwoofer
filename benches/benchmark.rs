@@ -372,7 +372,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     // ingests two inputs per operation.
     let num_inputs = inputs.as_ref().len();
     assert!(num_inputs >= 1);
-    let num_operation_inputs = if Inputs::MUST_SHARE {
+    let num_operation_inputs = if Inputs::IS_REUSED {
         num_inputs * ILP // Each input is sent to each ILP stream
     } else {
         num_inputs // Each ILP stream gets its own substream of the input
@@ -562,13 +562,27 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         b.iter_custom(
             #[inline(always)]
             move |iters| {
+                // Hack to ensure inputs and accumulators are initially in
+                // registers, which hints the compiler into keeping it that way.
                 let mut accumulators = accumulator_init.hide();
+                let inputs = inputs.hide();
+
+                // Timed benchmark loop
                 let start = Instant::now();
                 for _ in 0..iters {
-                    let local_inputs = inputs.hide();
-                    iteration(&mut accumulators, local_inputs);
+                    // Note that there is no optimization barrier on inputs,
+                    // because the impact on codegen was too high when operating
+                    // on register inputs (lots of useless reg-reg moves).
+                    //
+                    // This means that we must be careful about invalid
+                    // optimizations based on benchmark input reuse in the
+                    // microbenchmarks themselves.
+                    iteration(&mut accumulators, inputs);
                 }
                 let duration = start.elapsed();
+
+                // Make the compiler think that the output of the computation is
+                // used, so that it does not delete the entire computation.
                 for acc in accumulators {
                     pessimize::consume(acc);
                 }
@@ -605,15 +619,31 @@ fn addsub<T: Input, const ILP: usize>(accumulators: &mut [T; ILP], inputs: impl 
 /// therefore this computation consumes at least one extra register.
 #[cfg(feature = "bench_sqrt_positive_addsub")]
 #[inline(always)]
-fn sqrt_positive_addsub<T: Input, const ILP: usize>(
+fn sqrt_positive_addsub<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
-    inputs: impl InputSet<T>,
+    inputs: Inputs,
 ) {
+    let hidden_sqrt = |elem: T| {
+        if Inputs::IS_REUSED {
+            // Need this optimization barrier in the case of reused register
+            // inputs, so that the compiler doesn't abusively factor out the
+            // square root computation and reuse the result for all accumulators
+            // (or even for the entire computation)
+            pessimize::hide(elem).sqrt()
+        } else {
+            // No need in the case of non-reused memory inputs: each accumulator
+            // gets a different element from the input buffer to work with, and
+            // current compilers are not crazy enough to precompute square roots
+            // for a whole arbitrarily large batch of input data.
+            assert!(Inputs::REGISTER_FOOTPRINT.is_none());
+            elem.sqrt()
+        }
+    };
     iter_halves(
         accumulators,
         inputs,
-        |acc, elem| *acc += elem.sqrt(),
-        |acc, elem| *acc -= elem.sqrt(),
+        |acc, elem| *acc += hidden_sqrt(elem),
+        |acc, elem| *acc -= hidden_sqrt(elem),
     );
 }
 
@@ -697,7 +727,7 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     let iter = |acc: &mut T, factor, addend| {
         *acc = (acc.mul_add(factor, addend) + target) * T::splat(0.5);
     };
-    if Inputs::MUST_SHARE {
+    if Inputs::IS_REUSED {
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in local_accumulators.iter_mut() {
                 iter(acc, factor, addend);
@@ -742,7 +772,7 @@ fn iter_full<T: Input, Inputs: InputSet<T>, const ILP: usize>(
 ) {
     let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
-    if Inputs::MUST_SHARE {
+    if Inputs::IS_REUSED {
         for &elem in inputs {
             for acc in local_accumulators.iter_mut() {
                 iter(acc, elem);
@@ -779,7 +809,7 @@ fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
     let (low_inputs, high_inputs) = inputs.split_at(inputs.len() / 2);
-    if Inputs::MUST_SHARE {
+    if Inputs::IS_REUSED {
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in local_accumulators.iter_mut() {
                 low_iter(acc, low_elem);
@@ -828,7 +858,7 @@ trait InputSet<T: Input>: AsRef<[T]> + Borrow<[T]> + Copy {
     const REGISTER_FOOTPRINT: Option<usize>;
 
     /// Truth that we must use the same input for each accumulator
-    const MUST_SHARE: bool;
+    const IS_REUSED: bool;
 }
 //
 impl<T: Input, const N: usize> InputSet<T> for [T; N] {
@@ -839,7 +869,7 @@ impl<T: Input, const N: usize> InputSet<T> for [T; N] {
 
     const REGISTER_FOOTPRINT: Option<usize> = Some(N);
 
-    const MUST_SHARE: bool = true;
+    const IS_REUSED: bool = true;
 }
 //
 impl<T: Input> InputSet<T> for &[T] {
@@ -850,7 +880,7 @@ impl<T: Input> InputSet<T> for &[T] {
 
     const REGISTER_FOOTPRINT: Option<usize> = None;
 
-    const MUST_SHARE: bool = false;
+    const IS_REUSED: bool = false;
 }
 
 /// f32/f64 and Scalar/SIMD abstraction layer
