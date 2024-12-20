@@ -13,7 +13,7 @@ use std::{
 };
 use target_features::Architecture;
 
-// --- Benchmark configuration and combinatorial explosion ---
+// --- Benchmark configuration and steering ---
 
 /// Maximum granularity of subnormal occurence probabilities
 ///
@@ -1139,6 +1139,7 @@ const MIN_FLOAT_REGISTERS: usize = const {
             }
         }
         Architecture::RiscV => 32,
+        // TODO: Check for other architectures
         _ => 16,
     }
 };
@@ -1152,7 +1153,7 @@ const HAS_MEMORY_OPERANDS: bool = const {
     let target = target_features::CURRENT_TARGET;
     match target.architecture() {
         Architecture::X86 => true,
-        // TODO: Check for Arm, RISCV, etc.
+        // TODO: Check for other architectures
         _ => false,
     }
 };
