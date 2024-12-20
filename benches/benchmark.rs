@@ -73,15 +73,15 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         vec![usize::try_from(max_size_to_fit(*smallest_data_cache_sizes.first().unwrap())).unwrap()]
     };
 
-    // Then benchmark for each supported scalar floating-point type
+    // Then we will benchmark for each supported floating-point type
     let config = CommonConfiguration {
         benchmark_names: &benchmark_names,
         memory_input_sizes: &memory_input_sizes,
     };
-    benchmark_type::<f32>(c, config, "f32");
-    benchmark_type::<f64>(c, config, "f64");
 
-    // ...and each supported SIMD type too if configured to do so
+    // We start with the types for which the impact of all observed effects is
+    // expected to be the highest, namely the widest SIMD types, then we go down
+    // in width until we reach scalar types.
     //
     // Leading zeros in the SIMD type names are a workaround for criterion's
     // poor benchmark name sorting logic. You will find a lot more of these
@@ -101,22 +101,24 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            #[cfg(target_feature = "sse")]
-            benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
-            #[cfg(target_feature = "sse2")]
-            benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
-            #[cfg(target_feature = "avx")]
-            {
-                benchmark_type::<Simd<f32, 8>>(c, config, "f32x08");
-                benchmark_type::<Simd<f64, 4>>(c, config, "f64x04");
-            }
             #[cfg(target_feature = "avx512f")]
             {
                 benchmark_type::<Simd<f32, 16>>(c, config, "f32x16");
                 benchmark_type::<Simd<f64, 8>>(c, config, "f64x08");
             }
+            #[cfg(target_feature = "avx")]
+            {
+                benchmark_type::<Simd<f32, 8>>(c, config, "f32x08");
+                benchmark_type::<Simd<f64, 4>>(c, config, "f64x04");
+            }
+            #[cfg(target_feature = "sse")]
+            benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
+            #[cfg(target_feature = "sse2")]
+            benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
         }
     }
+    benchmark_type::<f32>(c, config, "f32");
+    benchmark_type::<f64>(c, config, "f64");
 }
 
 /// Common benchmark configuration
