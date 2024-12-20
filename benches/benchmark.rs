@@ -73,30 +73,48 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         vec![usize::try_from(max_size_to_fit(*smallest_data_cache_sizes.first().unwrap())).unwrap()]
     };
 
-    // Then benchmark for each supported floating-point type
+    // Then benchmark for each supported scalar floating-point type
     let config = CommonConfiguration {
         benchmark_names: &benchmark_names,
         memory_input_sizes: &memory_input_sizes,
     };
     benchmark_type::<f32>(c, config, "f32");
     benchmark_type::<f64>(c, config, "f64");
+
+    // ...and each supported SIMD type too if configured to do so
+    //
+    // Leading zeros in the SIMD type names are a workaround for criterion's
+    // poor benchmark name sorting logic. You will find a lot more of these
+    // workarounds throughout this codebase...
     #[cfg(feature = "simd")]
     {
-        // FIXME: Mess around with cfg_if to better approximate actually
-        //        supported SIMD instruction sets on non-x86 architectures
+        // TODO: Expand pessimize's SIMD support in order to to cover more SIMD
+        //       types from NEON, SVE, RISC-V vector extensions... The way this
+        //       benchmark is currently designed, we can support any vector
+        //       instruction set for which the following two conditions are met:
         //
-        // Leading zeros works around poor criterion bench name sorting
-        benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
+        //       1. The portable Simd type from std implements a conversion to
+        //          and from a matching architectural SIMD type.
+        //       2. Rust's inline ASM, which we use as our optimization barrier,
+        //          accepts SIMD register operands of that type.
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
         benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx"))]
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            benchmark_type::<Simd<f32, 8>>(c, config, "f32x08");
-            benchmark_type::<Simd<f64, 4>>(c, config, "f64x04");
-        }
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-        {
-            benchmark_type::<Simd<f32, 16>>(c, config, "f32x16");
-            benchmark_type::<Simd<f64, 8>>(c, config, "f64x08");
+            #[cfg(target_feature = "sse")]
+            benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
+            #[cfg(target_feature = "sse2")]
+            benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
+            #[cfg(target_feature = "avx")]
+            {
+                benchmark_type::<Simd<f32, 8>>(c, config, "f32x08");
+                benchmark_type::<Simd<f64, 4>>(c, config, "f64x04");
+            }
+            #[cfg(target_feature = "avx512f")]
+            {
+                benchmark_type::<Simd<f32, 16>>(c, config, "f32x16");
+                benchmark_type::<Simd<f64, 8>>(c, config, "f64x08");
+            }
         }
     }
 }
@@ -114,93 +132,77 @@ struct CommonConfiguration<'a> {
 /// Benchmark a set of ILP configurations for a given scalar/SIMD type, using
 /// input data from a CPU cache or RAM
 macro_rules! for_each_ilp {
-    // Decide which ILP configurations we are going to try...
-    ( $benchmark:ident ::< $t:ty > $args:tt with { config: $config:expr } ) => {
+    // Decide which ILP configurations we are going to instantiate...
+    ( $benchmark:ident ::< $t:ty > $args:tt with { selected_ilp: $selected_ilp:expr } ) => {
         for_each_ilp!(
-            $benchmark::<$t> $args with { config: $config, ilp: [1, 2, 4, 8, 16, 32] }
+            $benchmark::<$t> $args with { selected_ilp: $selected_ilp, instantiated_ilps: [1, 2, 4, 8, 16, 32] }
         );
     };
 
     // ...then generate all these ILP configurations, pick the one currently
     // selected by the outer ILP loop in benchmark_type(), and make sure that
     // this configuration can fit in CPU registers for at least one benchmark...
-    ( $benchmark:ident ::< $t:ty > $args:tt with { config: $config:expr, ilp: [ $($ilp:literal),* ] } ) => {
-        // On CPU architectures without memory operands, we need one extra CPU
-        // register to load memory inputs even in the addsub benchmark.
+    ( $benchmark:ident ::< $t:ty > $args:tt with { selected_ilp: $selected_ilp:expr, instantiated_ilps: [ $($instantiated_ilp:literal),* ] } ) => {
+        // On CPU architectures without memory operands, we need at least one
+        // CPU register to load memory inputs even in the simplest benchmark.
         let input_operand_registers = if HAS_MEMORY_OPERANDS { 0 } else { 1 };
-        match $config.ilp {
+        match $selected_ilp {
             $(
-                $ilp => if $ilp <= MIN_FLOAT_REGISTERS - input_operand_registers {
-                    for_each_ilp!(
-                        $benchmark::<$t, $ilp> $args with { benchmark_name: $config.benchmark_name }
-                    );
+                $instantiated_ilp => if $instantiated_ilp <= MIN_FLOAT_REGISTERS - input_operand_registers {
+                    $benchmark::<$t, $instantiated_ilp> $args
                 }
             )*
-            _ => unimplemented!("Asked to run with unsupported ILP {}", $config.ilp),
+            _ => unimplemented!("Asked to run with unsupported ILP {}", $selected_ilp),
         }
-    };
-
-    // ...finally, add the benchmark name to the list of benchmark arguments and
-    // call the inner benchmark worker.
-    ( $benchmark:ident ::< $t:ty, $ilp:literal >( $($arg:expr),* ) with { benchmark_name: $benchmark_name:expr } ) => {
-        $benchmark::<$t, $ilp>( $($arg,)* $benchmark_name );
     };
 }
 
 /// Benchmark a set of ILP configurations for a given scalar/SIMD type, using
 /// input from CPU registers
+///
+/// This macro is a more complex variation of for_each_ilp!() above, so you may
+/// want to study this one first before you try to figure out that one.
 #[cfg(feature = "register_data_sources")]
 macro_rules! for_each_registers_and_ilp {
     // Decide which INPUT_REGISTERS configurations we are going to try...
-    ( $benchmark:ident ::< $t:ty > $args:tt with { config: $config:expr } ) => {
-        // We need 1 register per accumulator and the highest ILP we target
-        // is 16 (see below why). This ILP only works for platforms with 32
-        // registers, as it leaves no register left for input on platforms with
-        // 16 registers.
-        //
-        // On platforms with 16 registers, the highest we can go while still
-        // having some room for register inputs is ILP8, which consumes 8
-        // registers for accumulators and leaves 8 free for inputs and
-        // temporaries like FMA operands or square roots.
-        //
-        // 3-4 temporaries is enough for all the computations we're doing here,
-        // therefore, configurations with <4 input registers underuse registers
-        // on all known CPUs. We thus don't compile them in by default to save a
-        // bit of compilation and execution time.
-        //
-        // Similarly, >=32 input registers make no sense because the largest
-        // platforms have 32 registers and we need some regs for accumulators
-        #[cfg(feature = "tiny_inputs")]
+    ( $benchmark:ident ::< $t:ty > $args:tt with { criterion: $criterion:expr, type_config: $type_config:expr } ) => {
         for_each_registers_and_ilp!(
-            // Not covering the single-input case because we need at least two
-            // inputs for many benchmarks
-            $benchmark::<$t> $args with { config: $config, inputregs: [2] }
-        );
-        for_each_registers_and_ilp!(
-            $benchmark::<$t> $args with { config: $config, inputregs: [4, 8, 16] }
+            // In addition to the registers that we use for inputs, we need at
+            // least one register for accumulators.
+            //
+            // So in our current power-of-two register allocation scheme, we can
+            // have at most MIN_FLOAT_REGISTERS/2 register inputs. The currently
+            // highest known amount of architectural float registers is 32, so
+            // there is no point in generating configurations with more than 16
+            // register inputs at this point in time.
+            //
+            // I am also not covering single-register inputs because many
+            // benchmarks require at least two inputs to work as expected.
+            $benchmark::<$t> $args with { criterion: $criterion, type_config: $type_config, inputregs: [2, 4, 8, 16] }
         );
     };
 
-    // ...then loop over these INPUT_REGISTERS configurations, giving each a
-    // human-readable name that will be added to the list of benchmark
-    // arguments, then decide which ILP configurations we are going to try...
-    ( $benchmark:ident ::< $t:ty > $args:tt with { config: $config:expr, inputregs: [ $($inputregs:literal),* ] } ) => {
+    // ...then iterate over these INPUT_REGISTERS configurations, giving each
+    // its own Criterion benchmark group, and then decide which ILP
+    // configurations we are going to instantiate...
+    ( $benchmark:ident ::< $t:ty > $args:tt with { criterion: $criterion:expr, type_config: $type_config:expr, inputregs: [ $($inputregs:literal),* ] } ) => {
         $({
-            // Name this input configuration
+            // Set up a criterion group for this input configuration
             let data_source_name = if $inputregs == 1 {
                 // Leading zeros works around poor criterion bench name sorting
                 "01register".to_string()
             } else {
                 format!("{:02}registers", $inputregs)
             };
+            let mut group = $criterion.benchmark_group(format!("{}/{data_source_name}", $type_config.group_name_prefix));
 
-            // Dispatch to ILP configurations
+            // Dispatch to the proper ILP configurations
             for_each_registers_and_ilp!(
                 // We need 1 register per accumulator and current hardware has
-                // at most 32 scalar/SIMD registers, so it does not make sense
-                // to compile for ILP >= 32 at this point in time as we'd have
+                // at most 32 float registers, so it does not make sense to
+                // compile for ILP >= 32 at this point in time as we would have
                 // no registers left for input.
-                $benchmark::<$t, $inputregs> $args with { config: $config, data_source_name: &data_source_name, ilp: [1, 2, 4, 8, 16] }
+                $benchmark::<$t, $inputregs> $args with { group: &mut group, selected_ilp: $type_config.ilp, instantiated_ilps: [1, 2, 4, 8, 16] }
             );
         })*
     };
@@ -208,25 +210,36 @@ macro_rules! for_each_registers_and_ilp {
     // ...then generate all these ILP configurations, pick the one currently
     // selected by the outer ILP loop in benchmark_type(), and make sure that
     // this configuration can fit in CPU registers for at least one benchmark...
-    ( $benchmark:ident ::< $t:ty, $inputregs:literal > $args:tt with { config: $config:expr, data_source_name: $data_source_name:expr, ilp: [ $($ilp:literal),* ] } ) => {
-        match $config.ilp {
+    ( $benchmark:ident ::< $t:ty, $inputregs:literal > $args:tt with { group: $group:expr, selected_ilp: $selected_ilp:expr, instantiated_ilps: [ $($instantiated_ilp:literal),* ] } ) => {
+        match $selected_ilp {
             $(
-                // Minimal register footprint = $inputregs shared inputs + $ilp accumulators
-                $ilp => if ($ilp + $inputregs) <= MIN_FLOAT_REGISTERS {
+                // Need at least $inputregs registers for registers for register
+                // inputs and $ilp registers for accumulators
+                $instantiated_ilp => if ($instantiated_ilp + $inputregs) <= MIN_FLOAT_REGISTERS {
                     for_each_registers_and_ilp!(
-                        $benchmark::<$t, $inputregs, $ilp> $args with { data_source_name: $data_source_name, benchmark_name: $config.benchmark_name }
+                        $benchmark::<$t, $inputregs, $instantiated_ilp> $args with { group: $group }
                     );
                 }
             )*
-            _ => unimplemented!("Asked to run with unsupported ILP {}", $config.ilp),
+            _ => unimplemented!("Asked to run with unsupported ILP {}", $selected_ilp),
         }
     };
 
-    // ...finally, add the data source name and benchmark name to the list of
-    // benchmark arguments and call the inner benchmark worker.
-    ( $benchmark:ident ::< $t:ty, $inputregs:literal, $ilp:literal >( $($arg:expr),* ) with { data_source_name: $data_source_name:expr, benchmark_name: $benchmark_name:expr } ) => {
-        $benchmark::<$t, $inputregs, $ilp>( $($arg,)* $data_source_name, $benchmark_name );
+    // ...finally, add the criterion group to the list of benchmark arguments
+    // and call the inner benchmark worker.
+    ( $benchmark:ident ::< $t:ty, $inputregs:literal, $ilp:literal >( $($arg:expr),* ) with { group: $group:expr } ) => {
+        $benchmark::<$t, $inputregs, $ilp>( $($arg,)* $group );
     };
+}
+
+/// Common configuration currently selected by `benchmark_type()`
+#[cfg(feature = "register_data_sources")]
+struct TypeConfiguration<'group_name_prefix> {
+    /// Selected degree of ILP
+    ilp: usize,
+
+    /// Common prefix for the names of inner criterion benchmark groups
+    group_name_prefix: &'group_name_prefix str,
 }
 
 /// Benchmark all ILP configurations for a given scalar/SIMD type
@@ -236,30 +249,32 @@ fn benchmark_type<T: Input>(c: &mut Criterion, common_config: CommonConfiguratio
     for benchmark_name in common_config.benchmark_names {
         // ...and for each supported degree of ILP...
         for ilp in (0..32usize.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
-            // Set up a criterion group for the (type, benchmark, ilp) triplet
+            // Name this (type, benchmark, ilp) triplet
             let ilp_name = if ilp == 1 {
                 "chained".to_string()
             } else {
                 // Leading zeros works around poor criterion bench name sorting
                 format!("ilp{ilp:02}")
             };
-            let mut group = c.benchmark_group(format!("{tname}/{benchmark_name}/{ilp_name}"));
-            let type_config = TypeConfiguration {
-                benchmark_name,
-                ilp,
-            };
+            let group_name_prefix = format!("{tname}/{benchmark_name}/{ilp_name}");
 
             // Benchmark with input data that fits in CPU registers
             #[cfg(feature = "register_data_sources")]
-            for_each_registers_and_ilp!(benchmark_ilp_registers::<T>(&mut group) with { config: type_config });
+            {
+                let type_config = TypeConfiguration {
+                    ilp,
+                    group_name_prefix: &group_name_prefix,
+                };
+                for_each_registers_and_ilp!(benchmark_ilp_registers::<T>(benchmark_name) with { criterion: c, type_config: &type_config });
+            }
 
             // Benchmark with input data that fits in L1, L2, ... all the way to RAM
             for (idx, &input_size) in common_config.memory_input_sizes.iter().enumerate() {
-                // Allocate required storage
+                // Allocate storage for input data
                 let num_elems = input_size / std::mem::size_of::<T>();
                 let mut input_storage = vec![T::default(); num_elems];
 
-                // Name this input configuration
+                // Set up a criterion group for this input configuration
                 let data_source_name = if cfg!(feature = "more_memory_data_sources") {
                     if idx < common_config.memory_input_sizes.len() - 1 {
                         format!("L{}cache", idx + 1)
@@ -270,22 +285,14 @@ fn benchmark_type<T: Input>(c: &mut Criterion, common_config: CommonConfiguratio
                     assert_eq!(common_config.memory_input_sizes.len(), 1);
                     "L1cache".to_string()
                 };
+                let mut group =
+                    c.benchmark_group(format!("{group_name_prefix}/{data_source_name}"));
 
                 // Run the benchmarks at each supported ILP level
-                for_each_ilp!(benchmark_ilp_memory::<T>(&mut group, &mut input_storage, &data_source_name) with { config: type_config });
+                for_each_ilp!(benchmark_ilp_memory::<T>(benchmark_name, &mut group, &mut input_storage) with { selected_ilp: ilp });
             }
         }
     }
-}
-
-/// Type-specific benchmark configuration
-#[derive(Copy, Clone)]
-struct TypeConfiguration {
-    /// Selected benchmark
-    benchmark_name: &'static str,
-
-    /// Selected degree of ILP
-    ilp: usize,
 }
 
 /// Benchmark all scalar or SIMD configurations for a floating-point type, using
@@ -293,9 +300,8 @@ struct TypeConfiguration {
 #[cfg(feature = "register_data_sources")]
 #[inline(never)] // Trying to make perf profiles look nicer
 fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: usize>(
-    group: &mut BenchmarkGroup<WallTime>,
-    data_source_name: &str,
     benchmark_name: &'static str,
+    group: &mut BenchmarkGroup<WallTime>,
 ) {
     // Iterate over subnormal configurations
     let num_subnormal_configurations = INPUT_REGISTERS.min(MAX_SUBNORMAL_CONFIGURATIONS);
@@ -304,15 +310,15 @@ fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: us
         let num_subnormals = subnormal_share * INPUT_REGISTERS / num_subnormal_configurations;
         let inputs = T::generate_positive_inputs_exact::<INPUT_REGISTERS>(num_subnormals);
 
-        // Name this input
+        // Name this subnormal configuration
         let input_name = format!(
-            "{data_source_name}/{num_subnormals:0num_digits$}in{INPUT_REGISTERS}_subnormal",
+            "{num_subnormals:0num_digits$}in{INPUT_REGISTERS}",
             // Leading zeros works around poor criterion bench name sorting
             num_digits = INPUT_REGISTERS.ilog10() as usize
         );
 
         // Run all the benchmarks on this input
-        benchmark_ilp::<_, _, ILP>(group, benchmark_name, inputs, &input_name);
+        benchmark_ilp::<_, _, ILP>(benchmark_name, group, inputs, &input_name);
     }
 }
 
@@ -320,10 +326,9 @@ fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: us
 /// inputs from memory
 #[inline(never)] // Trying to make perf profiles look nicer
 fn benchmark_ilp_memory<T: Input, const ILP: usize>(
+    benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
     input_storage: &mut [T],
-    data_source_name: &str,
-    benchmark_name: &'static str,
 ) {
     // Iterate over subnormal configurations
     for subnormal_probability in 0..=MAX_SUBNORMAL_CONFIGURATIONS {
@@ -332,15 +337,15 @@ fn benchmark_ilp_memory<T: Input, const ILP: usize>(
             subnormal_probability as f32 / MAX_SUBNORMAL_CONFIGURATIONS as f32;
         T::generate_positive_inputs(input_storage, subnormal_probability);
 
-        // Name this input
+        // Name this subnormal configuration
         let input_name = format!(
             // Leading zeros works around poor criterion bench name sorting
-            "{data_source_name}/{:03.0}%_subnormal",
+            "{:03.0}%",
             subnormal_probability * 100.0
         );
 
         // Run all the benchmarks on this input
-        benchmark_ilp::<_, _, ILP>(group, benchmark_name, &*input_storage, &input_name);
+        benchmark_ilp::<_, _, ILP>(benchmark_name, group, &*input_storage, &input_name);
     }
 }
 
@@ -348,8 +353,8 @@ fn benchmark_ilp_memory<T: Input, const ILP: usize>(
 /// inputs from CPU registers or memory
 #[inline(never)] // Trying to make perf profiles look nicer
 fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
-    group: &mut BenchmarkGroup<WallTime>,
     benchmark_name: &'static str,
+    group: &mut BenchmarkGroup<WallTime>,
     inputs: Inputs,
     input_name: &str,
 ) {
@@ -376,9 +381,9 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     let num_inputs = inputs.as_ref().len();
     assert!(num_inputs >= 2);
     let num_operation_inputs = if Inputs::IS_REUSED {
-        num_inputs * ILP // Each input is sent to each ILP stream
+        num_inputs * ILP // Each input is fed to each ILP stream
     } else {
-        num_inputs // Each ILP stream gets its own substream of the input
+        num_inputs // Each ILP stream gets its own substream of the input data
     } as u64;
     group.throughput(Throughput::Elements(num_operation_inputs));
 
@@ -397,7 +402,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         }
 
         // Unless the more_ilp_configurations feature is turned on, also
-        // eliminate configurations other than the minimum, maximum, and
+        // eliminate ILP configurations other than the minimum, maximum, and
         // half-maximum ILP for memory operands.
         if cfg!(feature = "more_ilp_configurations") {
             true
@@ -564,20 +569,22 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             #[inline(always)]
             move |iters| {
                 // This makes sure that the compiler treats each benchmark as
-                // its own computation (no abusive caching), and also has the
-                // beneficial side-effect of ensuring inputs and accumulators
-                // are initially in CPU registers, which hints the compiler into
-                // keeping them there.
+                // its own unrelated computation (no abusive output caching). It
+                // also has the beneficial side-effect of ensuring inputs and
+                // accumulators are initially in CPU registers, which hints the
+                // compiler into keeping them there.
                 let mut accumulators = accumulator_init.hide();
                 let inputs = inputs.hide();
 
-                // Timed benchmark loop
+                // Timed region, be careful with optimization barriers here
                 let start = Instant::now();
                 for _ in 0..iters {
                     // Note that there is no optimization barrier on inputs,
                     // because the impact on codegen was observed to be too high
-                    // when operating on register inputs (lots of useless
-                    // reg-reg moves).
+                    // in the case of register inputs (lots of useless reg-reg
+                    // moves in generated ASM) and we don't really need them for
+                    // memory input (they contain too much data for the compiler
+                    // to be clever and optimize out iterations).
                     //
                     // This means that we must be careful about invalid
                     // optimizations based on compiler-observed benchmark input
@@ -587,7 +594,7 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 let duration = start.elapsed();
 
                 // Make the compiler think that the output of the computation is
-                // used, so that it does not delete the entire computation.
+                // used, so that it does not delete the computation.
                 for acc in accumulators {
                     pessimize::consume(acc);
                 }
@@ -621,7 +628,8 @@ fn addsub<T: Input, const ILP: usize>(accumulators: &mut [T; ILP], inputs: impl 
 /// They are thus not a good candidate for CPU microbenchmarking.
 ///
 /// Square roots must be stored in one temporary register before add/sub,
-/// therefore this computation consumes at least one extra register.
+/// therefore this computation consumes at least one extra register even on
+/// architectures with memory operands.
 #[cfg(feature = "bench_sqrt_positive_addsub")]
 #[inline(always)]
 fn sqrt_positive_addsub<T: Input, Inputs: InputSet<T>, const ILP: usize>(
@@ -713,12 +721,10 @@ fn fma_addend_average<T: Input, const ILP: usize>(
     });
 }
 
-/// Benchmark FMA with possibly subnormal inputs, followed by averaging.
+/// Benchmark FMA with possibly subnormal inputs, followed by averaging
 ///
-/// This benchmark has twice the register pressure (need registers for both the
-/// accumulator and one of the operands because no hardware architecture that I
-/// know of has an FMA variant with two memory operands), therefore it is
-/// available in less ILP configurations.
+/// Even on architectures with memory operands, at least one operand must be
+/// loaded in a register, further restricting available ILP.
 #[cfg(feature = "bench_fma_full_average")]
 #[inline(always)]
 fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
@@ -1114,7 +1120,7 @@ where
 
 // --- Microarchitectural information ---
 
-/// How many scalar/SIMD registers we can use before spilling
+/// How many scalar/SIMD registers we can reliably use before spilling
 const MIN_FLOAT_REGISTERS: usize = const {
     let target = target_features::CURRENT_TARGET;
     match target.architecture() {

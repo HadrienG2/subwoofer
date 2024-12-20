@@ -68,18 +68,6 @@ more_data_sources = ["register_data_sources", "more_memory_data_sources"]
 register_data_sources = []
 more_memory_data_sources = []
 
-# By default, CPU register inputs start at the maximum that is known to be
-# available for all benchmarks on all hardware architectures, which saves a bit
-# of compilation and execution time.
-#
-# Enable this feature if you want to know if something special happens when the
-# number of benchmark inputs is tiny (down to 2 input registers), which may make
-# it easier for the CPU to individually flag them as normal or subnormal... and
-# also increases the relative overhead of benchmark loop management.
-#
-# The price to pay is a moderate increase in compilation and execution time.
-tiny_inputs = ["register_data_sources"]
-
 # By default, we only run benchmarks with no instruction-level parallelism
 # (always latency-bound), with ~maximal ILP (hopefully throughput-bound), and
 # with half the maximal ILP (as a sanity check, see below).
