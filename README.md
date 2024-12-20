@@ -160,6 +160,13 @@ Benchmarks names folow a `type/op/ilp/source/subnormals` structure where...
       is expected to be the highest. If you want to measure how it goes down
       when the code becomes more memory-bound, then add `more_data_sources` to
       the set of Cargo features. This will increase execution time.
+    * Even in this configuration, note that you may only reliably observe cache
+      trashing effects on the benchmarks that use the largest available SIMD
+      vector width. As long as a benchmark consumes less bytes of data per
+      second than the smallest single-core bandwidth of all involved layers of
+      the memory hierarchy, the streaming prefetcher of more advanced CPUs can
+      compensate for an oversized dataset by preloading data before the
+      benchmark has even asked for it.
 - `subnormals` indicates how many subnormals are present in the input.
 
 The presence of leading zeros in numbers within the benchmark name may confuse

@@ -84,6 +84,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     {
         // FIXME: Mess around with cfg_if to better approximate actually
         //        supported SIMD instruction sets on non-x86 architectures
+        //
         // Leading zeros works around poor criterion bench name sorting
         benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
         benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
@@ -152,28 +153,30 @@ macro_rules! for_each_ilp {
 macro_rules! for_each_registers_and_ilp {
     // Decide which INPUT_REGISTERS configurations we are going to try...
     ( $benchmark:ident ::< $t:ty > $args:tt with { config: $config:expr } ) => {
+        // We need 1 register per accumulator and the highest ILP we target
+        // is 16 (see below why). This ILP only works for platforms with 32
+        // registers, as it leaves no register left for input on platforms with
+        // 16 registers.
+        //
+        // On platforms with 16 registers, the highest we can go while still
+        // having some room for register inputs is ILP8, which consumes 8
+        // registers for accumulators and leaves 8 free for inputs and
+        // temporaries like FMA operands or square roots.
+        //
+        // 3-4 temporaries is enough for all the computations we're doing here,
+        // therefore, configurations with <4 input registers underuse registers
+        // on all known CPUs. We thus don't compile them in by default to save a
+        // bit of compilation and execution time.
+        //
+        // Similarly, >=32 input registers make no sense because the largest
+        // platforms have 32 registers and we need some regs for accumulators
         #[cfg(feature = "tiny_inputs")]
         for_each_registers_and_ilp!(
-            $benchmark::<$t> $args with { config: $config, inputregs: [1, 2, 4, 8, 16] }
+            // Not covering the single-input case because we need at least two
+            // inputs for many benchmarks
+            $benchmark::<$t> $args with { config: $config, inputregs: [2] }
         );
-        #[cfg(not(feature = "tiny_inputs"))]
         for_each_registers_and_ilp!(
-            // We need 1 register per accumulator and the highest ILP we target
-            // is 16 (see below why). This ILP only works for platforms with 32
-            // registers, as it leaves no register left for input on platforms
-            // with 16 registers.
-            //
-            // On platforms with 16 registers, the highest we can go is ILP8,
-            // which consumes 8 registers for accumulators and leaves 8 free for
-            // inputs and temporaries like operands or square roots.
-            //
-            // 3-4 temporaries is enough for all the computations we're doing
-            // here, therefore, configurations with <4 inputs underuse registers
-            // on all known CPUs. We thus don't compile them in by default to
-            // save compilation time.
-            //
-            // Similarly, >=32 input registers make no sense because the largest
-            // platforms have 32 registers and we need some for accumulators
             $benchmark::<$t> $args with { config: $config, inputregs: [4, 8, 16] }
         );
     };
@@ -371,7 +374,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     // inputs/second for almost all benchmarks, except for fma_full which
     // ingests two inputs per operation.
     let num_inputs = inputs.as_ref().len();
-    assert!(num_inputs >= 1);
+    assert!(num_inputs >= 2);
     let num_operation_inputs = if Inputs::IS_REUSED {
         num_inputs * ILP // Each input is sent to each ILP stream
     } else {
@@ -530,12 +533,10 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         #[cfg(feature = "bench_fma_full_average")]
         if benchmark_name == "fma_full_average" {
             let aux_registers_except_op1 = aux_registers_average + 1;
-            if num_inputs >= 2
-                && should_check_ilp(
-                    aux_registers_except_op1,
-                    aux_registers_except_op1 + aux_registers_direct_memop,
-                )
-            {
+            if should_check_ilp(
+                aux_registers_except_op1,
+                aux_registers_except_op1 + aux_registers_direct_memop,
+            ) {
                 // Benchmark fma then averaging with possibly subnormal operands
                 group.throughput(Throughput::Elements(num_operation_inputs / 2));
                 group.bench_with_input(
@@ -579,8 +580,8 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                     // reg-reg moves).
                     //
                     // This means that we must be careful about invalid
-                    // optimizations based on benchmark input reuse in the
-                    // microbenchmarks themselves.
+                    // optimizations based on compiler-observed benchmark input
+                    // reuse inside of the microbenchmarks themselves.
                     iteration(&mut accumulators, inputs);
                 }
                 let duration = start.elapsed();
@@ -732,6 +733,7 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         *acc = (acc.mul_add(factor, addend) + target) * T::splat(0.5);
     };
     if Inputs::IS_REUSED {
+        assert_eq!(inputs.len() % 2, 0);
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in local_accumulators.iter_mut() {
                 iter(acc, factor, addend);
@@ -781,9 +783,9 @@ fn iter_full<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             for acc in local_accumulators.iter_mut() {
                 iter(acc, elem);
             }
+            // Need this barrier to prevent autovectorization
+            local_accumulators = local_accumulators.hide();
         }
-        // Need this barrier to prevent autovectorization
-        local_accumulators = local_accumulators.hide();
     } else {
         let chunks = inputs.chunks_exact(ILP);
         let remainder = chunks.remainder();
@@ -814,6 +816,7 @@ fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     let inputs = inputs.as_ref();
     let (low_inputs, high_inputs) = inputs.split_at(inputs.len() / 2);
     if Inputs::IS_REUSED {
+        assert_eq!(inputs.len() % 2, 0);
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in local_accumulators.iter_mut() {
                 low_iter(acc, low_elem);

@@ -73,7 +73,7 @@ more_memory_data_sources = []
 # of compilation and execution time.
 #
 # Enable this feature if you want to know if something special happens when the
-# number of benchmark inputs is tiny (down to a single register), which may make
+# number of benchmark inputs is tiny (down to 2 input registers), which may make
 # it easier for the CPU to individually flag them as normal or subnormal... and
 # also increases the relative overhead of benchmark loop management.
 #
