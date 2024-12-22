@@ -356,7 +356,7 @@ fn benchmark_ilp_memory<T: FloatLike, const ILP: usize>(
         // Name this subnormal configuration
         let input_name = format!(
             // Leading zeros works around poor criterion bench name sorting
-            "{:03.01}%",
+            "{:0>5.1}%",
             subnormal_probability * 100.0,
         );
 
