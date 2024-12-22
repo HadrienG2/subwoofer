@@ -1,12 +1,11 @@
 #![feature(portable_simd)]
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use hwlocality::Topology;
 use pessimize::Pessimize;
 use rand::{distributions::Uniform, prelude::*};
 use std::{
-    borrow::Borrow,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     simd::{LaneCount, Simd, StdFloat, SupportedLaneCount},
     time::Instant,
@@ -20,8 +19,16 @@ use target_features::Architecture;
 /// Higher is more precise, but the benchmark execution time in the default
 /// configuration is multipled accordingly.
 const MAX_SUBNORMAL_CONFIGURATIONS: usize = const {
-    if cfg!(feature = "more_subnormal_frequencies") {
+    if cfg!(feature = "subnormal_freq_resolution_1in128") {
+        128 // 0.78125% granularity
+    } else if cfg!(feature = "subnormal_freq_resolution_1in64") {
+        64 // 1.5625% granularity
+    } else if cfg!(feature = "subnormal_freq_resolution_1in32") {
+        32 // 3.125% granularity
+    } else if cfg!(feature = "subnormal_freq_resolution_1in16") {
         16 // 6.25% granularity
+    } else if cfg!(feature = "subnormal_freq_resolution_1in8") {
+        8 // 12.5% granularity
     } else {
         4 // 25% granularity
     }
@@ -246,7 +253,11 @@ struct TypeConfiguration<'group_name_prefix> {
 
 /// Benchmark all ILP configurations for a given scalar/SIMD type
 #[inline(never)] // Trying to make perf profiles look nicer
-fn benchmark_type<T: Input>(c: &mut Criterion, common_config: CommonConfiguration, tname: &str) {
+fn benchmark_type<T: FloatLike>(
+    c: &mut Criterion,
+    common_config: CommonConfiguration,
+    tname: &str,
+) {
     // For each benchmarked operation...
     for benchmark_name in common_config.benchmark_names {
         // ...and for each supported degree of ILP...
@@ -301,7 +312,7 @@ fn benchmark_type<T: Input>(c: &mut Criterion, common_config: CommonConfiguratio
 /// inputs from CPU registers
 #[cfg(feature = "register_data_sources")]
 #[inline(never)] // Trying to make perf profiles look nicer
-fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: usize>(
+fn benchmark_ilp_registers<T: FloatLike, const INPUT_REGISTERS: usize, const ILP: usize>(
     benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
 ) {
@@ -310,7 +321,7 @@ fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: us
     for subnormal_share in 0..=num_subnormal_configurations {
         // Generate input data
         let num_subnormals = subnormal_share * INPUT_REGISTERS / num_subnormal_configurations;
-        let inputs = T::generate_positive_inputs_exact::<INPUT_REGISTERS>(num_subnormals);
+        let inputs = T::generate_positive_input_array::<INPUT_REGISTERS>(num_subnormals);
 
         // Name this subnormal configuration
         let input_name = format!(
@@ -320,14 +331,14 @@ fn benchmark_ilp_registers<T: Input, const INPUT_REGISTERS: usize, const ILP: us
         );
 
         // Run all the benchmarks on this input
-        benchmark_ilp::<_, _, ILP>(benchmark_name, group, inputs, &input_name);
+        benchmark_ilp::<_, _, ILP>(benchmark_name, group, inputs, input_name);
     }
 }
 
 /// Benchmark all scalar or SIMD configurations for a floating-point type, using
 /// inputs from memory
 #[inline(never)] // Trying to make perf profiles look nicer
-fn benchmark_ilp_memory<T: Input, const ILP: usize>(
+fn benchmark_ilp_memory<T: FloatLike, const ILP: usize>(
     benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
     input_storage: &mut [T],
@@ -336,29 +347,32 @@ fn benchmark_ilp_memory<T: Input, const ILP: usize>(
     for subnormal_probability in 0..=MAX_SUBNORMAL_CONFIGURATIONS {
         // Generate input data
         let subnormal_probability =
-            subnormal_probability as f32 / MAX_SUBNORMAL_CONFIGURATIONS as f32;
-        T::generate_positive_inputs(input_storage, subnormal_probability);
+            subnormal_probability as f64 / MAX_SUBNORMAL_CONFIGURATIONS as f64;
+        T::generate_positive_inputs(
+            input_storage,
+            (subnormal_probability * input_storage.len() as f64).round() as usize,
+        );
 
         // Name this subnormal configuration
         let input_name = format!(
             // Leading zeros works around poor criterion bench name sorting
-            "{:03.0}%",
-            subnormal_probability * 100.0
+            "{:03.01}%",
+            subnormal_probability * 100.0,
         );
 
         // Run all the benchmarks on this input
-        benchmark_ilp::<_, _, ILP>(benchmark_name, group, &*input_storage, &input_name);
+        benchmark_ilp::<_, _, ILP>(benchmark_name, group, &mut *input_storage, input_name);
     }
 }
 
 /// Benchmark all scalar or SIMD configurations for a floating-point type, using
 /// inputs from CPU registers or memory
 #[inline(never)] // Trying to make perf profiles look nicer
-fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
+fn benchmark_ilp<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
     benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
-    inputs: Inputs,
-    input_name: &str,
+    mut inputs: TSet,
+    input_name: String,
 ) {
     // Generate accumulator initial values and averaging targets
     let mut rng = rand::thread_rng();
@@ -380,9 +394,9 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     // Throughput in operations/second is equal to throughput in data
     // inputs/second for almost all benchmarks, except for fma_full which
     // ingests two inputs per operation.
-    let num_inputs = inputs.as_ref().len();
+    let num_inputs = inputs.as_mut().len();
     assert!(num_inputs >= 2);
-    let num_operation_inputs = if Inputs::IS_REUSED {
+    let num_operation_inputs = if TSet::IS_REUSED {
         num_inputs * ILP // Each input is fed to each ILP stream
     } else {
         num_inputs // Each ILP stream gets its own substream of the input data
@@ -394,7 +408,7 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     // operating from register and memory inputs.
     let should_check_ilp = |aux_registers_regop: usize, aux_registers_memop: usize| {
         // First eliminate configurations that would spill to the stack
-        let non_accumulator_registers = if let Some(input_registers) = Inputs::REGISTER_FOOTPRINT {
+        let non_accumulator_registers = if let Some(input_registers) = TSet::REGISTER_FOOTPRINT {
             input_registers + aux_registers_regop
         } else {
             aux_registers_memop
@@ -431,10 +445,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         #[cfg(feature = "bench_addsub")]
         if benchmark_name == "addsub" {
             if should_check_ilp(0, aux_registers_direct_memop) {
-                group.bench_with_input(
+                run_benchmark(
+                    group,
+                    inputs,
                     input_name,
-                    &inputs,
-                    make_criterion_benchmark(additive_accumulator_init, addsub),
+                    additive_accumulator_init,
+                    #[inline(always)]
+                    |acc, inputs| addsub(acc, inputs),
                 );
             }
             break 'select_benchmark;
@@ -449,10 +466,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
         #[cfg(feature = "bench_sqrt_positive_addsub")]
         if benchmark_name == "sqrt_positive_addsub" {
             if should_check_ilp(1, 1) {
-                group.bench_with_input(
+                run_benchmark(
+                    group,
+                    inputs,
                     input_name,
-                    &inputs,
-                    make_criterion_benchmark(additive_accumulator_init, sqrt_positive_addsub),
+                    additive_accumulator_init,
+                    #[inline(always)]
+                    |acc, inputs| sqrt_positive_addsub(acc, inputs),
                 );
             }
             break 'select_benchmark;
@@ -475,10 +495,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 // First benchmark the averaging in isolation
                 #[cfg(feature = "bench_average")]
                 if benchmark_name == "average" {
-                    group.bench_with_input(
+                    run_benchmark(
+                        group,
+                        inputs,
                         input_name,
-                        &inputs,
-                        make_criterion_benchmark(averaging_accumulator_init, average),
+                        averaging_accumulator_init,
+                        #[inline(always)]
+                        |acc, inputs| average(acc, inputs),
                     );
                     break 'select_benchmark;
                 }
@@ -486,14 +509,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 // Benchmark multiplication -> averaging
                 #[cfg(feature = "bench_mul_average")]
                 if benchmark_name == "mul_average" {
-                    group.bench_with_input(
+                    run_benchmark(
+                        group,
+                        inputs,
                         input_name,
-                        &inputs,
-                        make_criterion_benchmark(
-                            averaging_accumulator_init,
-                            #[inline(always)]
-                            move |acc, inputs| mul_average(acc, average_target, inputs),
-                        ),
+                        averaging_accumulator_init,
+                        #[inline(always)]
+                        |acc, inputs| mul_average(acc, average_target, inputs),
                     );
                     break 'select_benchmark;
                 }
@@ -501,14 +523,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 // Benchmark fma with possibly subnormal multiplier -> averaging
                 #[cfg(feature = "bench_fma_multiplier_average")]
                 if benchmark_name == "fma_multiplier_average" {
-                    group.bench_with_input(
+                    run_benchmark(
+                        group,
+                        inputs,
                         input_name,
-                        &inputs,
-                        make_criterion_benchmark(
-                            averaging_accumulator_init,
-                            #[inline(always)]
-                            move |acc, inputs| fma_multiplier_average(acc, average_target, inputs),
-                        ),
+                        averaging_accumulator_init,
+                        #[inline(always)]
+                        |acc, inputs| fma_multiplier_average(acc, average_target, inputs),
                     );
                     break 'select_benchmark;
                 }
@@ -516,14 +537,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 // Benchmark fma with possibly subnormal addend -> averaging
                 #[cfg(feature = "bench_fma_addend_average")]
                 if benchmark_name == "fma_addend_average" {
-                    group.bench_with_input(
+                    run_benchmark(
+                        group,
+                        inputs,
                         input_name,
-                        &inputs,
-                        make_criterion_benchmark(
-                            averaging_accumulator_init,
-                            #[inline(always)]
-                            move |acc, inputs| fma_addend_average(acc, average_target, inputs),
-                        ),
+                        averaging_accumulator_init,
+                        #[inline(always)]
+                        |acc, inputs| fma_addend_average(acc, average_target, inputs),
                     );
                     break 'select_benchmark;
                 }
@@ -546,14 +566,13 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             ) {
                 // Benchmark fma then averaging with possibly subnormal operands
                 group.throughput(Throughput::Elements(num_operation_inputs / 2));
-                group.bench_with_input(
+                run_benchmark(
+                    group,
+                    inputs,
                     input_name,
-                    &inputs,
-                    make_criterion_benchmark(
-                        averaging_accumulator_init,
-                        #[inline(always)]
-                        move |acc, inputs| fma_full_average(acc, average_target, inputs),
-                    ),
+                    averaging_accumulator_init,
+                    #[inline(always)]
+                    |acc, inputs| fma_full_average(acc, average_target, inputs),
                 );
             }
             break 'select_benchmark;
@@ -561,22 +580,25 @@ fn benchmark_ilp<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     }
 }
 
-/// Wrap a benchmark for consumption by criterion's bench_with_input
-fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
+/// Run a criterion benchmark based on the specified iteration function
+fn run_benchmark<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
+    group: &mut BenchmarkGroup<WallTime>,
+    mut inputs: TSet,
+    input_name: String,
     accumulator_init: [T; ILP],
-    mut iteration: impl FnMut(&mut [T; ILP], Inputs) + Copy,
-) -> impl for<'a> FnMut(&mut Bencher<'a, WallTime>, &Inputs) {
-    move |b, &inputs| {
+    mut iteration: impl FnMut(&mut [T; ILP], TSet::Sequence<'_>) + Copy,
+) {
+    group.bench_function(input_name, move |b| {
         b.iter_custom(
             #[inline(always)]
-            move |iters| {
+            |iters| {
                 // This makes sure that the compiler treats each benchmark as
                 // its own unrelated computation (no abusive output caching). It
                 // also has the beneficial side-effect of ensuring inputs and
                 // accumulators are initially in CPU registers, which hints the
                 // compiler into keeping them there.
                 let mut accumulators = accumulator_init.hide();
-                let inputs = inputs.hide();
+                let inputs = inputs.make_sequence();
 
                 // Timed region, be careful with optimization barriers here
                 let start = Instant::now();
@@ -603,7 +625,7 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
                 duration
             },
         );
-    }
+    });
 }
 
 // --- Actual benchmarks ---
@@ -615,7 +637,10 @@ fn make_criterion_benchmark<T: Input, Inputs: InputSet<T>, const ILP: usize>(
 /// the normal range forever.
 #[cfg(feature = "bench_addsub")]
 #[inline(always)]
-fn addsub<T: Input, const ILP: usize>(accumulators: &mut [T; ILP], inputs: impl InputSet<T>) {
+fn addsub<T: FloatLike, const ILP: usize>(
+    accumulators: &mut [T; ILP],
+    inputs: impl FloatSequence<T>,
+) {
     iter_halves(
         accumulators,
         inputs,
@@ -634,12 +659,12 @@ fn addsub<T: Input, const ILP: usize>(accumulators: &mut [T; ILP], inputs: impl 
 /// architectures with memory operands.
 #[cfg(feature = "bench_sqrt_positive_addsub")]
 #[inline(always)]
-fn sqrt_positive_addsub<T: Input, Inputs: InputSet<T>, const ILP: usize>(
+fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
-    inputs: Inputs,
+    inputs: TSeq,
 ) {
     let hidden_sqrt = |elem: T| {
-        if Inputs::IS_REUSED {
+        if TSeq::IS_REUSED {
             // Need this optimization barrier in the case of reused register
             // inputs, so that the compiler doesn't abusively factor out the
             // square root computation and reuse the result for all accumulators
@@ -650,7 +675,7 @@ fn sqrt_positive_addsub<T: Input, Inputs: InputSet<T>, const ILP: usize>(
             // gets a different element from the input buffer to work with, and
             // current compilers are not crazy enough to precompute square roots
             // for a whole arbitrarily large batch of input data.
-            assert!(Inputs::REGISTER_FOOTPRINT.is_none());
+            assert!(TSeq::REGISTER_FOOTPRINT.is_none());
             elem.sqrt()
         }
     };
@@ -676,7 +701,10 @@ fn sqrt_positive_addsub<T: Input, Inputs: InputSet<T>, const ILP: usize>(
 /// Averaging uses 2 CPU registers, restricting available ILP
 #[cfg(feature = "bench_average")]
 #[inline(always)]
-fn average<T: Input, const ILP: usize>(accumulators: &mut [T; ILP], inputs: impl InputSet<T>) {
+fn average<T: FloatLike, const ILP: usize>(
+    accumulators: &mut [T; ILP],
+    inputs: impl FloatSequence<T>,
+) {
     iter_full(accumulators, inputs, |acc, elem| {
         *acc = (*acc + elem) * T::splat(0.5)
     });
@@ -685,10 +713,10 @@ fn average<T: Input, const ILP: usize>(accumulators: &mut [T; ILP], inputs: impl
 /// Benchmark multiplication followed by averaging
 #[cfg(feature = "bench_mul_average")]
 #[inline(always)]
-fn mul_average<T: Input, const ILP: usize>(
+fn mul_average<T: FloatLike, const ILP: usize>(
     accumulators: &mut [T; ILP],
     target: T,
-    inputs: impl InputSet<T>,
+    inputs: impl FloatSequence<T>,
 ) {
     iter_full(accumulators, inputs, move |acc, elem| {
         *acc = ((*acc * elem) + target) * T::splat(0.5)
@@ -698,10 +726,10 @@ fn mul_average<T: Input, const ILP: usize>(
 /// Benchmark FMA with a possibly subnormal multiplier, followed by averaging
 #[cfg(feature = "bench_fma_multiplier_average")]
 #[inline(always)]
-fn fma_multiplier_average<T: Input, const ILP: usize>(
+fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
     accumulators: &mut [T; ILP],
     target: T,
-    inputs: impl InputSet<T>,
+    inputs: impl FloatSequence<T>,
 ) {
     let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
@@ -712,10 +740,10 @@ fn fma_multiplier_average<T: Input, const ILP: usize>(
 /// Benchmark FMA with a possibly subnormal addend, folowed by averaging
 #[cfg(feature = "bench_fma_addend_average")]
 #[inline(always)]
-fn fma_addend_average<T: Input, const ILP: usize>(
+fn fma_addend_average<T: FloatLike, const ILP: usize>(
     accumulators: &mut [T; ILP],
     target: T,
-    inputs: impl InputSet<T>,
+    inputs: impl FloatSequence<T>,
 ) {
     let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
@@ -729,10 +757,10 @@ fn fma_addend_average<T: Input, const ILP: usize>(
 /// loaded in a register, further restricting available ILP.
 #[cfg(feature = "bench_fma_full_average")]
 #[inline(always)]
-fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
+fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
     target: T,
-    inputs: Inputs,
+    inputs: TSeq,
 ) {
     let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
@@ -740,7 +768,7 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
     let iter = |acc: &mut T, factor, addend| {
         *acc = (acc.mul_add(factor, addend) + target) * T::splat(0.5);
     };
-    if Inputs::IS_REUSED {
+    if TSeq::IS_REUSED {
         assert_eq!(inputs.len() % 2, 0);
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in local_accumulators.iter_mut() {
@@ -779,14 +807,14 @@ fn fma_full_average<T: Input, Inputs: InputSet<T>, const ILP: usize>(
 /// Benchmark skeleton that processes the full input identically
 #[allow(unused)]
 #[inline(always)]
-fn iter_full<T: Input, Inputs: InputSet<T>, const ILP: usize>(
+fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
-    inputs: Inputs,
+    inputs: TSeq,
     mut iter: impl FnMut(&mut T, T),
 ) {
     let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
-    if Inputs::IS_REUSED {
+    if TSeq::IS_REUSED {
         for &elem in inputs {
             for acc in local_accumulators.iter_mut() {
                 iter(acc, elem);
@@ -814,16 +842,16 @@ fn iter_full<T: Input, Inputs: InputSet<T>, const ILP: usize>(
 /// Benchmark skeleton that treats halves of the input differently
 #[allow(unused)]
 #[inline(always)]
-fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
+fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
-    inputs: Inputs,
+    inputs: TSeq,
     mut low_iter: impl FnMut(&mut T, T),
     mut high_iter: impl FnMut(&mut T, T),
 ) {
     let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
     let (low_inputs, high_inputs) = inputs.split_at(inputs.len() / 2);
-    if Inputs::IS_REUSED {
+    if TSeq::IS_REUSED {
         assert_eq!(inputs.len() % 2, 0);
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in local_accumulators.iter_mut() {
@@ -862,44 +890,8 @@ fn iter_halves<T: Input, Inputs: InputSet<T>, const ILP: usize>(
 
 // --- Data abstraction layer ---
 
-/// Array/slice abstraction layer
-trait InputSet<T: Input>: AsRef<[T]> + Borrow<[T]> + Copy {
-    /// Make a copy that is unrelated in the eyes of the optimizer
-    fn hide(self) -> Self;
-
-    /// Floating-point registers that are reserved for this input
-    ///
-    /// None means that the input comes from cache or RAM.
-    const REGISTER_FOOTPRINT: Option<usize>;
-
-    /// Truth that we must use the same input for each accumulator
-    const IS_REUSED: bool;
-}
-//
-impl<T: Input, const N: usize> InputSet<T> for [T; N] {
-    #[inline(always)]
-    fn hide(self) -> Self {
-        self.map(pessimize::hide)
-    }
-
-    const REGISTER_FOOTPRINT: Option<usize> = Some(N);
-
-    const IS_REUSED: bool = true;
-}
-//
-impl<T: Input> InputSet<T> for &[T] {
-    #[inline(always)]
-    fn hide(self) -> Self {
-        pessimize::hide(self)
-    }
-
-    const REGISTER_FOOTPRINT: Option<usize> = None;
-
-    const IS_REUSED: bool = false;
-}
-
-/// f32/f64 and Scalar/SIMD abstraction layer
-trait Input:
+/// Floating-point type that can be natively processed by the CPU
+trait FloatLike:
     Add<Output = Self>
     + AddAssign
     + Copy
@@ -952,40 +944,31 @@ trait Input:
     /// For SIMD types, we generate a vector of such floats.
     fn subnormal_sampler() -> impl Fn(&mut ThreadRng) -> Self;
 
-    /// Fill up `target` buffer with positive values that have probability
-    /// `subnormal_probability` of being taken from `subnormal_sampler`, and are
-    /// otherwise taken from `normal_sampler`.
-    fn generate_positive_inputs(target: &mut [Self], subnormal_probability: f32) {
+    /// Fill up `target` buffer with random input, taking `num_subnormals`
+    /// values from `subnormal_sampler`, and other values from `normal_sampler`
+    ///
+    /// Not that at this point, subnormal/normal inputs are not evenly
+    /// distributed. This part will be taken care of by
+    /// `FloatSet::make_sequence()` later in the pipeline.
+    fn generate_positive_inputs(target: &mut [Self], num_subnormals: usize) {
+        assert!(num_subnormals <= target.len());
         let mut rng = rand::thread_rng();
-        let normal = Self::normal_sampler();
+        let (subnormal_target, normal_target) = target.split_at_mut(num_subnormals);
         let subnormal = Self::subnormal_sampler();
-        for target in target {
-            *target = if rng.gen::<f32>() < subnormal_probability {
-                subnormal(&mut rng)
-            } else {
-                normal(&mut rng)
-            };
+        for target in subnormal_target {
+            *target = subnormal(&mut rng);
+        }
+        let normal = Self::normal_sampler();
+        for target in normal_target {
+            *target = normal(&mut rng);
         }
     }
 
-    /// Generate an array of values of which exactly `num_subnormals` values are
-    /// taken from `subnormal_sampler`. The remaining values are taken from
-    /// `normal_sampler` instead.
-    ///
-    /// The subnormal values are randomly distributed in the output array.
+    /// Array-based version of `generate_positive_inputs`
     #[cfg(feature = "register_data_sources")]
-    fn generate_positive_inputs_exact<const N: usize>(num_subnormals: usize) -> [Self; N] {
-        let normal = Self::normal_sampler();
-        let subnormal = Self::subnormal_sampler();
-        let mut rng = rand::thread_rng();
-        let mut result = std::array::from_fn(|i| {
-            if i < num_subnormals {
-                subnormal(&mut rng)
-            } else {
-                normal(&mut rng)
-            }
-        });
-        result.shuffle(&mut rng);
+    fn generate_positive_input_array<const N: usize>(num_subnormals: usize) -> [Self; N] {
+        let mut result = [Self::default(); N];
+        Self::generate_positive_inputs(&mut result[..], num_subnormals);
         result
     }
 
@@ -996,7 +979,7 @@ trait Input:
     fn sqrt(self) -> Self;
 }
 //
-impl Input for f32 {
+impl FloatLike for f32 {
     fn normal_sampler() -> impl Fn(&mut ThreadRng) -> Self {
         let dist = Uniform::new(-1.0, 1.0);
         move |rng| 2.0f32.powf(rng.sample(dist))
@@ -1025,7 +1008,7 @@ impl Input for f32 {
     }
 }
 //
-impl Input for f64 {
+impl FloatLike for f64 {
     fn normal_sampler() -> impl Fn(&mut ThreadRng) -> Self {
         let dist = Uniform::new(-1.0, 1.0);
         move |rng| 2.0f64.powf(rng.sample(dist))
@@ -1054,7 +1037,7 @@ impl Input for f64 {
     }
 }
 //
-impl<const WIDTH: usize> Input for Simd<f32, WIDTH>
+impl<const WIDTH: usize> FloatLike for Simd<f32, WIDTH>
 where
     LaneCount<WIDTH>: SupportedLaneCount,
     Self: Pessimize + StdFloat,
@@ -1087,7 +1070,7 @@ where
     }
 }
 //
-impl<const WIDTH: usize> Input for Simd<f64, WIDTH>
+impl<const WIDTH: usize> FloatLike for Simd<f64, WIDTH>
 where
     LaneCount<WIDTH>: SupportedLaneCount,
     Self: Pessimize + StdFloat,
@@ -1118,6 +1101,108 @@ where
     fn sqrt(self) -> Self {
         <Self as StdFloat>::sqrt(self)
     }
+}
+
+/// Unordered collection of benchmark inputs, must be ordered before use
+///
+/// For small collections of inputs (register inputs being the extreme case),
+/// the measured benchmark performance may depend on the position of subnormal
+/// inputs in the input stream.
+///
+/// This is for example expected of the `fma_full_average` benchmark on current
+/// Intel CPUs: a configuration where half of the FMAs have all-normal inputs
+/// and half of the FMAs have all-subnormal inputs should be twice as fast as a
+/// configuration where all FMAs have one normal and one subnormal input.
+///
+/// And although this has not been observed yet, on a hypothetical Sufficiently
+/// Weird Microarchitecture, we could even expect measured performance to vary a
+/// little depending on where in the input program the affected instruction is
+/// located, e.g. how close it is to the beginning or the end of the benchmark
+/// loop iteration.
+///
+/// This means that to make the measured benchmark performance as reproducible
+/// as possible across `cargo bench` runs, we need to do two things:
+///
+/// - Initially ensure that the specified share of subnormal inputs is exact,
+///   not approximately achieved by relying on large-scale statistical behavior.
+/// - Randomly shuffle inputs on each benchmark run so that the each instruction
+///   in the program gets all possible subnormal/normal input configurations
+///   evenly covered, given enough criterion benchmark runs.
+///
+/// The former is achieved by `T::generate_positive_inputs()`, while the latter
+/// is achieved by having a two step set -> sequence input generation pipeline.
+trait FloatSet<T: FloatLike>: AsMut<[T]> {
+    /// Associated FloatSequence type
+    type Sequence<'a>: FloatSequence<T>
+    where
+        Self: 'a;
+
+    /// Generate an ordered sequence of inputs, hidden from the optimizer
+    fn make_sequence(&mut self) -> Self::Sequence<'_>;
+
+    /// Re-expose useful Sequence properties for easier access
+    const IS_REUSED: bool = Self::Sequence::<'_>::IS_REUSED;
+    const REGISTER_FOOTPRINT: Option<usize> = Self::Sequence::<'_>::REGISTER_FOOTPRINT;
+}
+//
+impl<T: FloatLike, const N: usize> FloatSet<T> for [T; N] {
+    type Sequence<'a>
+        = Self
+    where
+        Self: 'a;
+
+    fn make_sequence(&mut self) -> Self {
+        self.shuffle(&mut rand::thread_rng());
+        (*self).hide()
+    }
+}
+//
+impl<T: FloatLike> FloatSet<T> for &mut [T] {
+    type Sequence<'a>
+        = &'a [T]
+    where
+        Self: 'a;
+
+    fn make_sequence(&mut self) -> &[T] {
+        self.shuffle(&mut rand::thread_rng());
+        self.hide()
+    }
+}
+
+/// Randomly ordered sequence of inputs that is ready for benchmark consumption
+trait FloatSequence<T: FloatLike>: AsRef<[T]> + Copy {
+    /// Make a copy that is unrelated in the eyes of the optimizer
+    fn hide(self) -> Self;
+
+    /// Floating-point registers that are reserved for this input
+    ///
+    /// None means that the input comes from memory (CPU cache or RAM).
+    const REGISTER_FOOTPRINT: Option<usize>;
+
+    /// Truth that we must reuse the same input for each accumulator
+    const IS_REUSED: bool;
+}
+//
+impl<T: FloatLike, const N: usize> FloatSequence<T> for [T; N] {
+    #[inline(always)]
+    fn hide(self) -> Self {
+        self.map(pessimize::hide)
+    }
+
+    const REGISTER_FOOTPRINT: Option<usize> = Some(N);
+
+    const IS_REUSED: bool = true;
+}
+//
+impl<T: FloatLike> FloatSequence<T> for &[T] {
+    #[inline(always)]
+    fn hide(self) -> Self {
+        pessimize::hide(self)
+    }
+
+    const REGISTER_FOOTPRINT: Option<usize> = None;
+
+    const IS_REUSED: bool = false;
 }
 
 // --- Microarchitectural information ---

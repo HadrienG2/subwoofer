@@ -29,9 +29,9 @@ check = [
 # The price to pay is a large increase in compilation and execution time.
 measure = [
     "bench_all",
-    "more_subnormal_frequencies",
     "register_data_sources",
     "simd",
+    "subnormal_freq_resolution_1in128",
 ]
 
 # Full set of supported microbenchmarks
@@ -82,27 +82,6 @@ more_memory_data_sources = []
 # The price to pay is a moderate increase in execution time.
 more_ilp_configurations = []
 
-# By default, we only check what happens with
-# [0, 25, 50, 75, 100]% of subnormal inputs. Enable this feature to
-# check what happens at more fine-grained frequencies of subnormal inputs.
-#
-# This lets you get insight into the implementation of subnormals and its
-# bottlenecks at the CPU microarchitacture level:
-#
-# - If overhead is maximal at high frequencies, it suggests that the extra costs
-#   of processing subnormals in the CPU backend predominate.
-# - If overhead is maximal around 50%, it suggests that the CPU's float
-#   processing logic starts with a subnormal/normal branch, whose misprediction
-#   costs predominate.
-# - If overhead is maximal at lower frequencies, then abruptly drops, it
-#   indicates that the CPU's fallback logic for handling subnormals can also
-#   handle normal numbers, and the manufacturer exploited this to avoid the
-#   aforementioned branch predictor trashing effects by staying in fallback mode
-#   when the frequency of subnormals occurence is higher than a threshold.
-#
-# The price to pay is a large increase in execution time.
-more_subnormal_frequencies = []
-
 # By default, we only check subnormal behavior in scalars.
 #
 # Enable this feature to also check vectors of all-normals or all-subnormals.
@@ -110,6 +89,33 @@ more_subnormal_frequencies = []
 #
 # The price to pay is a large increase in compilation and execution time.
 simd = []
+
+# By default, we check with [0, 25, 50, 75, 100]% of subnormal inputs.
+#
+# If you notice that the subnormals-induced slowdown does not follow a simple
+# monotonic pattern (e.g. linearly grows to a maximum at 100%, or linearly grows
+# from 0% to 50% then linearly decays from 50% to 100%), then you should try
+# enabling one of the following features to more precisely probe the overhead vs
+# subnormal occurence frequency curve.
+#
+# The suggested way to tune this for your hardware, if you have enough time, is:
+#
+# 1. Start with the maximal supported resolution configuration.
+# 2. Check out the criterion report, find out how many data point you truly need
+#    to faithfully probe the overhead vs subnormals frequency curve (e.g. to
+#    sample the maximal overhead point with good precision).
+# 3. If you need to re-run the benchmark on the same hardware later on, use only
+#    this number of data points to reduce execution time.
+#
+# The price to pay for increasing subnormal frequency resolution is a
+# multiplicative increase in execution time on benchmarks with memory inputs.
+subnormal_freq_resolution_1in8 = []
+subnormal_freq_resolution_1in16 = []
+subnormal_freq_resolution_1in32 = []
+subnormal_freq_resolution_1in64 = []
+subnormal_freq_resolution_1in128 = []
+# TODO: Add configurations and adjust "measure" configuration if we find
+#       hardware where <1% resolution is still not enough
 
 [dependencies]
 
