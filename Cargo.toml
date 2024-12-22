@@ -77,7 +77,8 @@ more_memory_data_sources = []
 # maximal ILP configuration, which suggests that the maximal ILP configuration
 # is running into a microarchitectural bottleneck e.g. it trashes the CPU's
 # instruction cache because there is too much code. In this situation, it is
-# better to try all ILP configurations.
+# better to try all ILP configurations to make sure that you do cover the ILP
+# configuration of highest runtime performance.
 #
 # The price to pay is a moderate increase in execution time.
 more_ilp_configurations = []

@@ -178,12 +178,18 @@ dependency chain that does not allow the CPU parallelize execution over
 superscalar units, so their execution time is just the latency of a single
 operation multipled by the number of operations.
 
+Unfortunately, there is one exception to this general rule, which is the
+`sqrt_positive_addsub` benchmark. This benchmark does not feature an SQRT ->
+SQRT -> SQRT... dependency chain, as doing that while guaranteeing continued
+subnormal input is difficult. Therefore, it cannot currently be used to measure
+SQRT latency, and its output in `chained` mode should be ignored.
+
 To study the impact of subnormals on throughput-bound code, look into benchmark
 timings at the `ilp` where the measured performance is highest for the operation
-of interest, in the input configuration where there is no subnormals. Bear in
-mind that given a sufficiently inefficient hardware subnormal fallback,
-operations on subnormal numbers can be latency-bound even though operations on
-normal numbers are throughput-bound.
+of interest. This should be done in the input configuration where there is no
+subnormals, because given a sufficiently inefficient hardware subnormal
+fallback, operations on subnormal numbers can become latency-bound even though
+operations on normal numbers are throughput-bound.
 
 For each benchmark, Criterion is configured to compute the throughput in
 operations/second. For the next analysis steps, you are going to need the
