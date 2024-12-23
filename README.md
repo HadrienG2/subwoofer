@@ -228,19 +228,19 @@ Benchmarks names folow a `type/op/ilp/source/%subnormals` structure where...
       `more_data_sources` to the set of Cargo features. But this will increase
       execution time.
 - `%subnormals` indicates what percentage of subnormals is present in the input.
-    * The proposed `measure` benchmark configuration tests subnormal shares with
-      enough percentage resolution to precisely probe the overhead curve on all
-      CPUs tested so far. Your CPU model may have a different overhead curve
-      that can be precisely probed with less percentage resolution (leading to
-      faster benchmark runs) or that requires more percentage resolution for
-      precise analysis (at the expense of slower runs). In that case you may
-      want to look into the various available `subnormal_freq_resolution_1inN`
-      Cargo features.
+    * The proposed `measure` benchmark configuration has enough percentage
+      resolution to precisely probe the overhead curve of all CPUs tested so
+      far. But your CPU model may have a different overhead curve that can be
+      precisely probed with less percentage resolution (leading to faster
+      benchmark runs) or that requires more percentage resolution for precise
+      analysis (at the expense of slower runs). In that case you may want to
+      look into the various available `subnormal_freq_resolution_1inN` Cargo
+      features.
     * If you ended up needing more data points than the current `measure`
-      configuration, consider submitting a PR that makes this the new default. I
-      would like that configuration to remain appropriate for precision
-      measurements (if possibly suboptimal in terms of benchmark running time)
-      on all known hardware.
+      configuration, please consider submitting a PR that makes this the new
+      default. I would like that configuration to remain appropriate for
+      precision measurements (if possibly suboptimal in terms of benchmark
+      running time) on all known hardware.
 
 The presence of leading zeros in numbers within the benchmark name may slightly 
 confuse you. This is needed to ensure that the entries of criterion reports like
@@ -286,8 +286,10 @@ operation's latency/throughput using the following calculations:
 
 * The `addsub` benchmark directly provides you with the average of the
   latencies/throughputs of ADD and SUB with a possibly subnormal operand. Those
-  operations have the same latency and throughput on all hardware that I know
-  of, so I did not bother creating benchmarks that measures them separately.
+  operations have the same performance characteristics on all hardware that I
+  know of (which is not surprising since subtracting x is the same as adding
+  -x), so in the interest of keeping benchmark running times minimal I did not
+  bother creating benchmarks that measures them separately.
 * By subtracting the duration of `addsub` in its maximal throughput 
   configuration from the duration of `sqrt_positive_addsub` in the same
   configuration, you can estimate the throughput of SQRT with a possibly
@@ -367,14 +369,15 @@ Beyond these two data sources, you can enable other ones (L2+ cache, RAM...)
 that have a higher latency and lower bandwidth using the
 `more_memory_data_sources` cargo feature. These slower data sources will usually
 exhibit a smaller relative impact from subnormal arithmetic because the CPU will
-be spending less time processing data and more time waiting for data to arrive.
-But this is only strongly expected to be true when processing data with the
-largest available SIMD vector width for a given CPU architecture.
+be spending less time processing data and more time waiting for data to arrive
+from the memory hierarchy.
 
+However, this overhead reduction is only strictly expected when processing data
+with the largest available SIMD vector width for a given CPU architecture.
 That's because as long as a benchmark consumes less bytes of data per cycle than
 the smallest single-core bandwidth of all involved layers of the memory
-hierarchy (which themselves are usually tuned to the CPU's widest SIMD vector
-width), the streaming prefetcher of the CPU can normally compensate for higher
+hierarchy (which themselves are typically tuned to the CPU's widest SIMD vector
+width), the streaming prefetcher of the CPU can compensate for quite a bit of
 memory load latencies by preloading data in faster caches before the CPU core
 has asked for it.
 
