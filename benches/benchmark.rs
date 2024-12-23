@@ -250,7 +250,7 @@ fn benchmark_type<T: FloatLike>(
     // For each benchmarked operation...
     for benchmark_name in common_config.benchmark_names {
         // ...and for each supported degree of ILP...
-        for ilp in (0..32usize.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
+        for ilp in (0..=MIN_FLOAT_REGISTERS.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
             // Name this (type, benchmark, ilp) triplet
             let ilp_name = if ilp == 1 {
                 "chained".to_string()
