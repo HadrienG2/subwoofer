@@ -31,7 +31,7 @@ measure = [
     "bench_all",
     "register_data_sources",
     "simd",
-    "subnormal_freq_resolution_1in128",
+    "subnormal_freq_resolution_1in64",
 ]
 
 # Full set of supported microbenchmarks
