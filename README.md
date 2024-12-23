@@ -27,9 +27,8 @@ You are going to need `rustup` and the `libhwloc` C library along with the
 associated pkg-config file. The latter should either be installed system-wide or
 be reachable via your `PKG_CONFIG_PATH`.
 
-On Unices like Linux and macOS, you can easily set up hwloc and the system-wide
-infrastructure needed to build Rust programs based on it with the following
-commands...
+On Unices like Linux and macOS, you can install `libhwloc` and the tooling
+needed to link it with Rust code by running the following commands...
 
 - **macOS:**
   ```bash
@@ -67,30 +66,33 @@ commands...
   && sudo zypper in hwloc-devel libudev-devel pkg-config
   ```
 
-...then you can get ready to install the required Rust development toolchain
-(which will happen automatically on the first `cargo bench` run) by installing
-`rustup` and bringing it into your current shell's environment like this:
+...then you can install `rustup` and bring it into your current shell's
+environment with those commands:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain none  \
 && . "$HOME/.cargo/env"
 ```
 
-On Windows, I would recommend using Windows Subsystem for Linux and following
-the instructions for Ubuntu above because...
+The required nightly Rust toolchain will then be installed automatically on the
+first run of one of the `cargo bench` commands discussed below.
 
-- WSL offers a much better developer user experience than native Windows
-  development
+On Windows, I would recommend using [Windows Subsystem for
+Linux](https://learn.microsoft.com/en-us/windows/wsl/install) (aka WSL) and
+following the instructions for Ubuntu above because...
+
+- WSL offers a much better software developer user experience than native
+  Windows development.
 - Contrary to what you may think, the underlying Linux virtual machine will not
   get in the way of precise CPU microbenchmarking due to the magic of 
   [VT-x](https://fr.wikipedia.org/wiki/Intel_VT)/[AMD-V](https://fr.wikipedia.org/wiki/Advanced_Micro_Devices#Pacifica/AMD-V).
 
 ...but if you really want a native Windows development environment, please take
-inspiration from [these
+inspiration from [these setup
 instructions](https://numerical-rust-cpu-d1379d.pages.math.cnrs.fr/setup/windows.html)
-that I wrote for a Rust numerical computing course of mine to set it up. To run
-this benchmark, you won't need HDF5 nor the HDF5-to-PNG renderer, so you can
-ignore the steps related to them in those instructions.
+that I wrote for my Rust numerical computing course, which will tell you how to
+set up everything needed for this benchmark plus HDF5 (you can leave out the
+latter if you care about minimalism).
 
 ### Improving accuracy/reproducibility
 
