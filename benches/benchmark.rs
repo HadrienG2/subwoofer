@@ -325,7 +325,7 @@ fn benchmark_register_inputs<T: FloatLike, const INPUT_REGISTERS: usize, const I
         let input_name = format!(
             "{num_subnormals:0num_digits$}in{INPUT_REGISTERS}",
             // Leading zeros works around poor criterion bench name sorting
-            num_digits = INPUT_REGISTERS.ilog10() as usize
+            num_digits = INPUT_REGISTERS.ilog10() as usize + 1
         );
 
         // Run all the benchmarks on this input
