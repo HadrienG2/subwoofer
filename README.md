@@ -227,15 +227,20 @@ Benchmarks names folow a `type/op/ilp/source/%subnormals` structure where...
       subnormals goes down when the code becomes more memory-bound, you can add
       `more_data_sources` to the set of Cargo features. But this will increase
       execution time.
-- `%subnormals` indicates what proportion of subnormals is present in the input.
+- `%subnormals` indicates what percentage of subnormals is present in the input.
     * The proposed `measure` benchmark configuration tests subnormal shares with
       enough percentage resolution to precisely probe the overhead curve on all
-      CPUs tested so far. Your CPU model may have an overhead curve that can be
-      precisely probed with less percentage resolution (leading to faster
-      benchmark runs) or that requires more percentage resolution for precise
-      analysis (at the expense of slower runs). In that case you may want to
-      look into the various available `subnormal_freq_resolution_1inN` Cargo
-      features.
+      CPUs tested so far. Your CPU model may have a different overhead curve
+      that can be precisely probed with less percentage resolution (leading to
+      faster benchmark runs) or that requires more percentage resolution for
+      precise analysis (at the expense of slower runs). In that case you may
+      want to look into the various available `subnormal_freq_resolution_1inN`
+      Cargo features.
+    * If you ended up needing more data points than the current `measure`
+      configuration, consider submitting a PR that makes this the new default. I
+      would like that configuration to remain appropriate for precision
+      measurements (if possibly suboptimal in terms of benchmark running time)
+      on all known hardware.
 
 The presence of leading zeros in numbers within the benchmark name may slightly 
 confuse you. This is needed to ensure that the entries of criterion reports like
@@ -245,6 +250,8 @@ correctly at the time of writing...
 
 
 ## Analyzing the output
+
+### Latency vs throughput
 
 To study the impact of subnormals on latency-bound code, look into benchmark
 timings where `ilp` is "chained". These benchmarks are made of a single long
@@ -271,7 +278,7 @@ operations/second. For the next analysis steps, you are going to need the
 average operation duration instead. To get it, simply invert the
 criterion-computed throughput.
 
----
+### Getting to pure ADD/SUB/MUL/FMA/SQRT timings
 
 Once you have the average operation duration for latency-bound and
 throughput-bound benchmarks, you can estimate the underlying hardware
@@ -301,7 +308,7 @@ operation's latency/throughput using the following calculations:
         * The frequency at which all inputs and the output are subnormal is the
           square of the frequency at which an individual input is subnormal.
 
----
+### Available data sources
 
 The highest normal arithmetic performance / subnormals impact will usually be
 observed for one of the two fastest data sources, "L1cache" and "Nregisters":
@@ -365,7 +372,7 @@ width), the streaming prefetcher of the CPU can normally compensate for higher
 memory load latencies by preloading data in faster caches before the CPU core
 has asked for it.
 
----
+### Understanding the subnormal fallback path
 
 Finally, by comparing the subnormal overhead at different subnormal input
 frequencies, you can gain insight into how your CPU implements its subnormal
