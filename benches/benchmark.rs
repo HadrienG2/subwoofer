@@ -166,16 +166,6 @@ macro_rules! for_each_ilp {
     };
 }
 
-/// Configuration selected by the outer double loop of `benchmark_type()`
-#[cfg(feature = "register_data_sources")]
-struct TypeConfiguration<'group_name_prefix> {
-    /// Selected degree of ILP
-    ilp: usize,
-
-    /// Common prefix for the names of all inner criterion benchmark groups
-    group_name_prefix: &'group_name_prefix str,
-}
-
 /// Benchmark a certain data type in a certain ILP configurations, using input
 /// data from CPU registers.
 ///
