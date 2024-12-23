@@ -278,7 +278,7 @@ operations/second. For the next analysis steps, you are going to need the
 average operation duration instead. To get it, simply invert the
 criterion-computed throughput.
 
-### Getting to pure ADD/SUB/MUL/FMA/SQRT timings
+### Estimating ADD/SUB/MUL/FMA/SQRT timings
 
 Once you have the average operation duration for latency-bound and
 throughput-bound benchmarks, you can estimate the underlying hardware
@@ -372,14 +372,14 @@ exhibit a smaller relative impact from subnormal arithmetic because the CPU will
 be spending less time processing data and more time waiting for data to arrive
 from the memory hierarchy.
 
-However, this overhead reduction is only strictly expected when processing data
-with the largest available SIMD vector width for a given CPU architecture.
-That's because as long as a benchmark consumes less bytes of data per cycle than
-the smallest single-core bandwidth of all involved layers of the memory
-hierarchy (which themselves are typically tuned to the CPU's widest SIMD vector
-width), the streaming prefetcher of the CPU can compensate for quite a bit of
-memory load latencies by preloading data in faster caches before the CPU core
-has asked for it.
+However, this relative overhead reduction is only strictly expected when
+processing data with the largest available SIMD vector width for a given CPU
+architecture. That's because as long as a benchmark consumes less bytes of data
+per cycle than the smallest single-core bandwidth of all involved layers of the
+memory hierarchy (which themselves are typically tuned to the CPU's widest SIMD
+vector width), the streaming prefetcher of the CPU can compensate for quite a
+bit of memory load latency by preloading data in faster caches before the CPU
+core has asked for it.
 
 ### Understanding the subnormal fallback path
 
@@ -397,21 +397,22 @@ For example...
   branch, whose misprediction costs dominate in this least predictable input
   configuration, but beyond that the overhead of processing normal and subnormal
   numbers is similar.
-  - In less branch-bottlenecked paths where the CPU backend overhead of the
-    subnormal path is observably higher than that of the normal path, you will
-    see it because the throughput will be lower at 100% of subnormals than at
-    0%, and the maximal overhead peak will be shifted horizontally a little
-    higher than the ~50% position of maximal-unpredictability.
+  - In less branch-bottlenecked implementations where the CPU backend overhead
+    of the subnormal path is observably higher than that of the normal path, you
+    will see it because the throughput will be lower at 100% of subnormals than
+    at 0%, and the maximal overhead peak will be shifted horizontally a little
+    higher than the ~50% position of maximal unpredictability.
   - Similarly, if the CPU manufacturer has opted to bias the branch predictor to
     more aggressively assume absence of subnormals, this will result in a
     horizontal shift of the branch-misprediction peak, this time towards a
     horizontal position smaller than 50%.
 * If the overhead reaches a maximum at a very low subnormal input frequencies,
-  then quickly drops to a lower magnitude, it suggests that the CPU's fallback
-  logic for handling subnormals can also handle normal numbers, and the CPU
-  manufacturer took advantage of this to avoid the overhead of normal/fallback
-  mode switches by remaining in fallback mode as long as the frequency of
-  subnormal input occurence remains higher than a certain threshold.
+  then quickly drops to a lower but still appreciable magnitude, it suggests
+  that the CPU's fallback logic for handling subnormals can also handle normal
+  numbers, and the CPU manufacturer took advantage of this to avoid the overhead
+  of normal/fallback mode switches by remaining in fallback mode as long as the
+  frequency of subnormal input occurence remains higher than a certain
+  threshold.
 
 Furthermore, by comparing results from different data types on the fastest data
 sources, you can also check for type-dependent limitations of the CPU's
