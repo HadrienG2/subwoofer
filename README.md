@@ -414,7 +414,9 @@ For example...
   subnormal input occurence remains higher than a certain threshold.
 
 Furthermore, by comparing results from different data types on the fastest data
-sources, you can also check presence or absence of type-dependent limitations of
-the CPU's subnormal fallback: is it slower on double-precision operands? Does it
-"serialize" SIMD operations into scalar operations or SIMD operations of smaller
-width?
+sources, you can also check for type-dependent limitations of the CPU's
+subnormal fallback:
+
+- Is it slower on double-precision operands than on single-precision operands?
+- Does it "serialize" SIMD operations on vectors of subnormal numbers into
+  scalar operations or SIMD operations of smaller width?
