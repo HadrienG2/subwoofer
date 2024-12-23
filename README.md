@@ -21,6 +21,79 @@ validate it for those ISAs too.
 
 ## Setting up your machine
 
+### Build requirements
+
+You are going to need `rustup` and the `libhwloc` C library along with the
+associated pkg-config file. The latter should either be installed system-wide or
+be reachable via your `PKG_CONFIG_PATH`.
+
+On Unices like Linux and macOS, you can easily set up hwloc and the system-wide
+infrastructure needed to build Rust programs based on it with the following
+commands...
+
+- **macOS:**
+  ```bash
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"  \
+  && brew install hwloc pkgconf
+  ```
+- **Debian/Ubuntu/Mint:**
+  ```bash
+  sudo apt-get update  \
+  && sudo apt-get install build-essential libhwloc-dev libudev-dev pkg-config
+  ```
+- **Fedora:**
+  ```bash
+  sudo dnf makecache --refresh   \
+  && sudo dnf group install c-development   \
+  && sudo dnf install hwloc-devel libudev-devel pkg-config
+  ```
+- **RHEL/Alma/Rocky:**
+  ```bash
+  sudo dnf makecache --refresh  \
+  && sudo dnf groupinstall "Devlopment tools"  \
+  && sudo dnf install epel-release  \
+  && sudo /usr/bin/crb enable  \
+  && sudo dnf makecache --refresh  \
+  && sudo dnf install hwloc-devel libudev-devel pkg-config
+  ```
+- **Arch:**
+  ```bash
+  sudo pacman -Syu base-devel libhwloc pkg-config
+  ```
+- **openSUSE:**
+  ```bash
+  sudo zypper ref  \
+  && sudo zypper in -t pattern devel_C_C++  \
+  && sudo zypper in hwloc-devel libudev-devel pkg-config
+  ```
+
+...then you can get ready to install the required Rust development toolchain
+(which will happen automatically on the first `cargo bench` run) by installing
+`rustup` and bringing it into your current shell's environment like this:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain none  \
+&& . "$HOME/.cargo/env"
+```
+
+On Windows, I would recommend using Windows Subsystem for Linux and following
+the instructions for Ubuntu above because...
+
+- WSL offers a much better developer user experience than native Windows
+  development
+- Contrary to what you may think, the underlying Linux virtual machine will not
+  get in the way of precise CPU microbenchmarking due to the magic of 
+  [VT-x](https://fr.wikipedia.org/wiki/Intel_VT)/[AMD-V](https://fr.wikipedia.org/wiki/Advanced_Micro_Devices#Pacifica/AMD-V).
+
+...but if you really want a native Windows development environment, please take
+inspiration from [these
+instructions](https://numerical-rust-cpu-d1379d.pages.math.cnrs.fr/setup/windows.html)
+that I wrote for a Rust numerical computing course of mine to set it up. To run
+this benchmark, you won't need HDF5 nor the HDF5-to-PNG renderer, so you can
+ignore the steps related to them in those instructions.
+
+### Improving accuracy/reproducibility
+
 The benchmarks are single-threaded and use robust statistics, so they should
 tolerate mild background OS load like code editing or basic web browsing at a
 minimal accuracy cost. But if you can afford it, running them on a quiet machine
@@ -42,21 +115,6 @@ Other classic CPU microbenchmarking tips apply:
   reliably convert the time-based measurements into cycle-based measurements.
   But beware that this configuration also reduces the real-world applicability
   of your measurements.
-
----
-
-You are also going to need `rustup` (see the [recommended toolchain installation
-procedure from the Rust project](https://www.rust-lang.org/learn/get-started))
-and the `libhwloc` C library. The latter should either be installed system-wide
-or be reachable via your `PKG_CONFIG_PATH`.
-
-On Unices like Linux and macOS, you can typically get a system-wide installation
-of `libhwloc` by installing a package named `hwloc`, `hwloc-devel`,
-`libhwloc-dev` or similar using your preferred package manager. Unfortunately,
-the packaging of `hwloc` is not consistent across package managers: some Linux
-distributions like Arch have a single package that bundles the CLI tools, the
-runtime libraries, and the files needed for building dependent binaries, whereas
-other Linux distributions package those bits separately.
 
 
 ## Running the benchmark
