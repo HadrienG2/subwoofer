@@ -653,8 +653,8 @@ fn addsub<T: FloatLike, const ILP: usize>(
     iter_halves(
         accumulators,
         inputs,
-        |acc, elem| *acc += elem,
-        |acc, elem| *acc -= elem,
+        |acc, elem| *acc = pessimize::hide::<T>(*acc + elem),
+        |acc, elem| *acc = pessimize::hide::<T>(*acc - elem),
     );
 }
 
@@ -691,8 +691,8 @@ fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     iter_halves(
         accumulators,
         inputs,
-        |acc, elem| *acc += hidden_sqrt(elem),
-        |acc, elem| *acc -= hidden_sqrt(elem),
+        |acc, elem| *acc = pessimize::hide::<T>(*acc + hidden_sqrt(elem)),
+        |acc, elem| *acc = pessimize::hide::<T>(*acc - hidden_sqrt(elem)),
     );
 }
 
@@ -723,7 +723,7 @@ fn average<T: FloatLike, const ILP: usize>(
     inputs: impl FloatSequence<T>,
 ) {
     iter_full(accumulators, inputs, |acc, elem| {
-        *acc = (elem + *acc) * T::splat(0.5)
+        *acc = pessimize::hide::<T>((elem + *acc) * T::splat(0.5))
     });
 }
 
@@ -751,7 +751,7 @@ fn mul_average<T: FloatLike, const ILP: usize>(
     inputs: impl FloatSequence<T>,
 ) {
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = ((*acc * elem) + target) * T::splat(0.5)
+        *acc = pessimize::hide::<T>(((*acc * elem) + target) * T::splat(0.5))
     });
 }
 
@@ -765,7 +765,7 @@ fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
 ) {
     let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = (acc.mul_add(elem, halve_weight) + target) * halve_weight;
+        *acc = pessimize::hide::<T>((acc.mul_add(elem, halve_weight) + target) * halve_weight);
     });
 }
 
@@ -779,7 +779,7 @@ fn fma_addend_average<T: FloatLike, const ILP: usize>(
 ) {
     let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = (acc.mul_add(halve_weight, elem) + target) * halve_weight;
+        *acc = pessimize::hide::<T>((acc.mul_add(halve_weight, elem) + target) * halve_weight);
     });
 }
 
@@ -806,15 +806,13 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     let inputs = inputs.as_ref();
     let (factor_inputs, addend_inputs) = inputs.split_at(inputs.len() / 2);
     let iter = |acc: &mut T, factor, addend| {
-        *acc = (acc.mul_add(factor, addend) + target) * T::splat(0.5);
+        *acc = pessimize::hide::<T>((acc.mul_add(factor, addend) + target) * T::splat(0.5));
     };
     if TSeq::IS_REUSED {
         assert_eq!(inputs.len() % 2, 0);
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in local_accumulators.iter_mut() {
                 iter(acc, factor, addend);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
         }
     } else {
@@ -829,8 +827,6 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
                 .zip(local_accumulators.iter_mut())
             {
                 iter(acc, factor, addend);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
         }
         for ((&factor, &addend), acc) in factor_remainder
@@ -858,8 +854,6 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         for &elem in inputs {
             for acc in local_accumulators.iter_mut() {
                 iter(acc, elem);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
         }
     } else {
@@ -868,8 +862,6 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         for chunk in chunks {
             for (&elem, acc) in chunk.iter().zip(local_accumulators.iter_mut()) {
                 iter(acc, elem);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
         }
         for (&elem, acc) in remainder.iter().zip(local_accumulators.iter_mut()) {
@@ -896,13 +888,9 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in local_accumulators.iter_mut() {
                 low_iter(acc, low_elem);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
             for acc in local_accumulators.iter_mut() {
                 high_iter(acc, high_elem);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
         }
     } else {
@@ -913,13 +901,9 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
             for (&low_elem, acc) in low_chunk.iter().zip(local_accumulators.iter_mut()) {
                 low_iter(acc, low_elem);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
             for (&high_elem, acc) in high_chunk.iter().zip(local_accumulators.iter_mut()) {
                 high_iter(acc, high_elem);
-                // Need this to prevent autovectorization across accumulators
-                *acc = pessimize::hide::<T>(*acc);
             }
         }
         for (&low_elem, acc) in low_remainder.iter().zip(local_accumulators.iter_mut()) {
