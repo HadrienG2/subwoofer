@@ -99,8 +99,8 @@ latter if you care about minimalism).
 The benchmarks are single-threaded and use robust statistics, so they should
 tolerate mild background OS load like code editing or basic web browsing at a
 minimal accuracy cost. But if you can afford it, running them on a quiet machine
-will yield more reliable and reproducible results, among other things due to the
-lack of CPU frequency scaling caused by other CPU cores intermittently waking
+will yield more reliable and reproducible results, among other things because
+you avoid CPU frequency scaling caused by other CPU cores intermittently waking
 up.
 
 If you have more time to set things up The Right Way (tm), other classic CPU
@@ -294,19 +294,25 @@ operation's latency/throughput using the following calculations:
   subnormal operand.
 * The `average` benchmark provides the latency/throughput of loading an input, 
   adding an in-register value to it, and multiplying the result by another
-  in-register constant. This operation does not directly translates to a
-  hardware figure or merit, but we need to benchmark it in order to interprete
-  the next benchmarks which include it.
+  in-register constant, with a dependency chain between consecutive operations.
+  This operation does not directly measure a hardware figure or merit, but we
+  need to benchmark it in order to interprete the results of the next benchmarks
+  which include this operation.
 * By subtracting the duration of `average` in one configuration from the
   duration of another benchmark in the same configuration, you can estimate the
   latency/throughput of...
-    - `mul_average`: MUL with a possibly subnormal operand
-    - `fma_multiplier_average`: FMA with a possibly subnormal multiplier
-    - `fma_addend_average`: FMA with a possibly subnormal addend
-    - `fma_full_average`: FMA with possibly subnormal multiplier, addend and
-      result
+    - `mul_average`: MUL with a possibly subnormal operand, leading to a
+      subnormal result.
+    - `fma_multiplier_average`: FMA with a possibly subnormal multiplier, but an
+      always normal result.
+    - `fma_addend_average`: FMA with a possibly subnormal addend, but an always
+      normal result.
+    - `fma_full_average`: FMA with a possibly subnormal multiplier, addend and
+      result.
         * The frequency at which all inputs and the output are subnormal is the
-          square of the frequency at which an individual input is subnormal.
+          square of the frequency at which an individual input is subnormal. The
+          rest of the time this benchmark behaves like `fma_multiplier_average`
+          or `fma_addend_average`.
 
 ### Available data sources
 
@@ -374,9 +380,8 @@ has asked for it.
 
 ### Understanding the subnormal fallback path
 
-Finally, by comparing the subnormal overhead at different subnormal input
-frequencies, you can gain insight into how your CPU implements its subnormal
-fallback path:
+By comparing the subnormal overhead at different subnormal input frequencies,
+you can learn more about how your CPU implements its subnormal fallback path:
 
 * If the observed overhead grows ~linearly to a maximum at 100% subnormal
   occurence frequency, it suggests that the extra costs of processing subnormals
@@ -385,14 +390,14 @@ fallback path:
   suggests that the CPU's float processing logic starts with a subnormal/normal
   branch, whose misprediction costs dominate in this least predictable input
   configuration.
-* If the overhead is maximal at lower frequencies, then abruptly drops, it
-  suggests that the CPU's fallback logic for handling subnormals can also handle
-  normal numbers, and the CPU manufacturer takes advantage of this to avoid the
-  overhead of normal/subnormal mode switches by remaining in fallback mode as
-  long as the frequency of subnormals occurence remains higher than a certain
-  threshold.
+* If the overhead reaches a maximum at low subnormal input frequencies, then
+  quickly drops to a lower magnitude, it suggests that the CPU's fallback logic
+  for handling subnormals can also handle normal numbers, and the CPU
+  manufacturer took advantage of this to avoid the overhead of normal/subnormal
+  mode switches by remaining in fallback mode as long as the frequency of
+  subnormals occurence remains higher than a certain threshold.
 
 By comparing results from different data types on the fastest data sources, you
-can additionally check for type-dependent limitations of the CPU's subnormal
-fallback: is it slower on double-precision operands? Does it "serialize" SIMD
-operations into scalar operations or SIMD operations of smaller width?
+can also check for type-dependent limitations of the CPU's subnormal fallback:
+is it slower on double-precision operands? Does it "serialize" SIMD operations
+into scalar operations or SIMD operations of smaller width?
