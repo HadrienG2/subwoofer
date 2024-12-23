@@ -384,23 +384,37 @@ has asked for it.
 ### Understanding the subnormal fallback path
 
 By comparing the subnormal overhead at different subnormal input frequencies,
-you can learn more about how your CPU implements its subnormal fallback path:
+you can learn more about how your CPU implements its subnormal fallback path.
+For example...
 
 * If the observed overhead grows ~linearly to a maximum at 100% subnormal
-  occurence frequency, it suggests that the extra costs of processing subnormals
-  in the CPU backend predominate.
+  occurence frequency, it suggests that the subnormals fallback path is
+  extremely inefficient and the extra processing costs dominate. This is for
+  example the case on those Intel CPUs where subnormal number processing causes
+  a CPU pipeline flush followed by execution of slow microcode.
 * If the overhead reaches a maximum around 50% and decays on both sides, it
   suggests that the CPU's float processing logic starts with a subnormal/normal
   branch, whose misprediction costs dominate in this least predictable input
-  configuration.
-* If the overhead reaches a maximum at low subnormal input frequencies, then
-  quickly drops to a lower magnitude, it suggests that the CPU's fallback logic
-  for handling subnormals can also handle normal numbers, and the CPU
-  manufacturer took advantage of this to avoid the overhead of normal/subnormal
+  configuration, but beyond that the overhead of processing normal and subnormal
+  numbers is similar.
+  - In less branch-bottlenecked paths where the CPU backend overhead of the
+    subnormal path is observably higher than that of the normal path, you will
+    see it because the throughput will be lower at 100% of subnormals than at
+    0%, and the maximal overhead peak will be shifted horizontally a little
+    higher than the ~50% position of maximal-unpredictability.
+  - Similarly, if the CPU manufacturer has opted to bias the branch predictor to
+    more aggressively assume absence of subnormals, this will result in a
+    horizontal shift of the branch-misprediction peak, this time towards a
+    horizontal position smaller than 50%.
+* If the overhead reaches a maximum at a very low subnormal input frequencies,
+  then quickly drops to a lower magnitude, it suggests that the CPU's fallback
+  logic for handling subnormals can also handle normal numbers, and the CPU
+  manufacturer took advantage of this to avoid the overhead of normal/fallback
   mode switches by remaining in fallback mode as long as the frequency of
-  subnormals occurence remains higher than a certain threshold.
+  subnormal input occurence remains higher than a certain threshold.
 
-By comparing results from different data types on the fastest data sources, you
-can also check for type-dependent limitations of the CPU's subnormal fallback:
-is it slower on double-precision operands? Does it "serialize" SIMD operations
-into scalar operations or SIMD operations of smaller width?
+Furthermore, by comparing results from different data types on the fastest data
+sources, you can also check presence or absence of type-dependent limitations of
+the CPU's subnormal fallback: is it slower on double-precision operands? Does it
+"serialize" SIMD operations into scalar operations or SIMD operations of smaller
+width?
