@@ -819,10 +819,10 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         assert_eq!(inputs.len() % 2, 0);
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in accumulators.iter_mut() {
+                // Needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(*acc);
                 iter(acc, factor, addend);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
     } else {
         let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -835,10 +835,10 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
                 .zip(addend_chunk)
                 .zip(accumulators.iter_mut())
             {
+                // Needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(*acc);
                 iter(acc, factor, addend);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for ((&factor, &addend), acc) in factor_remainder
             .iter()
@@ -864,20 +864,20 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         for &elem in inputs {
             let mut elem = elem;
             for acc in accumulators.iter_mut() {
+                // Needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(*acc);
                 iter(acc, elem);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
     } else {
         let chunks = inputs.chunks_exact(ILP);
         let remainder = chunks.remainder();
         for chunk in chunks {
             for (&elem, acc) in chunk.iter().zip(accumulators.iter_mut()) {
+                // Needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(*acc);
                 iter(acc, elem);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
             iter(acc, elem);
@@ -901,13 +901,13 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         assert_eq!(inputs.len() % 2, 0);
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in accumulators.iter_mut() {
+                // Needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(*acc);
                 low_iter(acc, low_elem);
             }
             for acc in accumulators.iter_mut() {
                 high_iter(acc, high_elem);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
     } else {
         let low_chunks = low_inputs.chunks_exact(ILP);
@@ -916,13 +916,13 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         let high_remainder = high_chunks.remainder();
         for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
             for (&low_elem, acc) in low_chunk.iter().zip(accumulators.iter_mut()) {
+                // Needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(*acc);
                 low_iter(acc, low_elem);
             }
             for (&high_elem, acc) in high_chunk.iter().zip(accumulators.iter_mut()) {
                 high_iter(acc, high_elem);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
             low_iter(acc, low_elem);
