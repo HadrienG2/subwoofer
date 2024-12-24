@@ -838,7 +838,7 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             }
             // Needed to inhibit autovectorization, otherwise e.g. N scalar
             // accumulators will be grouped into one SIMD vector
-            local_accumulators = local_accumulators.hide();
+            consume_accumulators(local_accumulators);
         }
     } else {
         let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -855,7 +855,7 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             }
             // Needed to inhibit autovectorization, otherwise e.g. N scalar
             // accumulators will be grouped into one SIMD vector
-            local_accumulators = local_accumulators.hide();
+            consume_accumulators(local_accumulators);
         }
         for ((&factor, &addend), acc) in factor_remainder
             .iter()
@@ -885,7 +885,7 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             }
             // Needed to inhibit autovectorization, otherwise e.g. N scalar
             // accumulators will be grouped into one SIMD vector
-            local_accumulators = local_accumulators.hide();
+            consume_accumulators(local_accumulators);
         }
     } else {
         let chunks = inputs.chunks_exact(ILP);
@@ -896,7 +896,7 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             }
             // Needed to inhibit autovectorization, otherwise e.g. N scalar
             // accumulators will be grouped into one SIMD vector
-            local_accumulators = local_accumulators.hide();
+            consume_accumulators(local_accumulators);
         }
         for (&elem, acc) in remainder.iter().zip(local_accumulators.iter_mut()) {
             iter(acc, elem);
@@ -928,7 +928,7 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             }
             // Needed to inhibit autovectorization, otherwise e.g. N scalar
             // accumulators will be grouped into one SIMD vector
-            local_accumulators = local_accumulators.hide();
+            consume_accumulators(local_accumulators);
         }
     } else {
         let low_chunks = low_inputs.chunks_exact(ILP);
@@ -944,7 +944,7 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             }
             // Needed to inhibit autovectorization, otherwise e.g. N scalar
             // accumulators will be grouped into one SIMD vector
-            local_accumulators = local_accumulators.hide();
+            consume_accumulators(local_accumulators);
         }
         for (&low_elem, acc) in low_remainder.iter().zip(local_accumulators.iter_mut()) {
             low_iter(acc, low_elem);
@@ -954,6 +954,14 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         }
     }
     *accumulators = local_accumulators;
+}
+
+/// Optimization barrier which pretends that each accumulator in a set is used
+#[inline(always)]
+fn consume_accumulators<T: FloatLike, const ILP: usize>(accs: [T; ILP]) {
+    for acc in accs {
+        pessimize::consume::<T>(acc)
+    }
 }
 
 // --- Data abstraction layer ---
