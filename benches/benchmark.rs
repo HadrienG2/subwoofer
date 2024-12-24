@@ -964,8 +964,8 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
 /// register.
 #[inline(always)]
 fn hide_accumulators<T: FloatLike, const ILP: usize>(accs: &mut [T; ILP]) {
-    for acc in accs.iter_mut() {
-        *acc = pessimize::hide::<T>(*acc)
+    for i in 0..ILP {
+        accs[i] = pessimize::hide::<T>(accs[i])
     }
 }
 
