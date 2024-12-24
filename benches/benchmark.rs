@@ -907,7 +907,8 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
                 *acc = pessimize::hide::<T>(low_iter(*acc, low_elem));
             }
             for acc in accumulators.iter_mut() {
-                *acc = high_iter(*acc, high_elem);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(high_iter(*acc, high_elem));
             }
         }
     } else {
@@ -921,7 +922,8 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
                 *acc = pessimize::hide::<T>(low_iter(*acc, low_elem));
             }
             for (&high_elem, acc) in high_chunk.iter().zip(accumulators.iter_mut()) {
-                *acc = high_iter(*acc, high_elem);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(high_iter(*acc, high_elem));
             }
         }
         for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
