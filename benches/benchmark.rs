@@ -910,7 +910,6 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         let remainder = chunks.remainder();
         for chunk in chunks {
             for (&elem, acc) in chunk.iter().zip(local_accumulators.iter_mut()) {
-                *acc = pessimize::hide(*acc);
                 iter(acc, elem);
             }
         }
@@ -950,7 +949,6 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         let high_remainder = high_chunks.remainder();
         for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
             for (&low_elem, acc) in low_chunk.iter().zip(local_accumulators.iter_mut()) {
-                *acc = pessimize::hide(*acc);
                 low_iter(acc, low_elem);
             }
             for (&high_elem, acc) in high_chunk.iter().zip(local_accumulators.iter_mut()) {
