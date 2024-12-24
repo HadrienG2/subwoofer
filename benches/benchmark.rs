@@ -632,7 +632,7 @@ fn run_benchmark<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
             let duration = start.elapsed();
 
             // Make the compiler think that the output of the computation is
-            // used, so that the optimizer cannot delete the computation.
+            // used, so that the optimizer cannot delete the whole computation.
             for acc in accumulators {
                 pessimize::consume::<T>(acc);
             }
@@ -691,7 +691,8 @@ fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             // Need this optimization barrier in the case of reused register
             // inputs, so that the compiler doesn't abusively factor out the
             // square root computation and reuse the result for all accumulators
-            // (or even for the entire benchmark iteration loop).)
+            // (it might even reuse them for the entire outer iters loop in
+            // run_benchmark someday if it got clever enough).
             //
             // This does not increase the register footprint because the code
             // has to store the output of the square root in a register that's
@@ -827,10 +828,9 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         assert_eq!(inputs.len() % 2, 0);
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in accumulators.iter_mut() {
-                *acc = iter(*acc, factor, addend);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(iter(*acc, factor, addend));
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
     } else {
         let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -843,10 +843,9 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
                 .zip(addend_chunk)
                 .zip(accumulators.iter_mut())
             {
-                *acc = iter(*acc, factor, addend);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(iter(*acc, factor, addend));
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for ((&factor, &addend), acc) in factor_remainder
             .iter()
@@ -870,20 +869,18 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     if TSeq::IS_REUSED {
         for &elem in inputs {
             for acc in accumulators.iter_mut() {
-                *acc = iter(*acc, elem);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(iter(*acc, elem));
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
     } else {
         let chunks = inputs.chunks_exact(ILP);
         let remainder = chunks.remainder();
         for chunk in chunks {
             for (&elem, acc) in chunk.iter().zip(accumulators.iter_mut()) {
-                *acc = iter(*acc, elem);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(iter(*acc, elem));
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
             *acc = iter(*acc, elem);
@@ -906,13 +903,12 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         assert_eq!(inputs.len() % 2, 0);
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in accumulators.iter_mut() {
-                *acc = low_iter(*acc, low_elem);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(low_iter(*acc, low_elem));
             }
             for acc in accumulators.iter_mut() {
                 *acc = high_iter(*acc, high_elem);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
     } else {
         let low_chunks = low_inputs.chunks_exact(ILP);
@@ -921,13 +917,12 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         let high_remainder = high_chunks.remainder();
         for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
             for (&low_elem, acc) in low_chunk.iter().zip(accumulators.iter_mut()) {
-                *acc = low_iter(*acc, low_elem);
+                // Barrier needed to avoid unwanted autovectorization
+                *acc = pessimize::hide::<T>(low_iter(*acc, low_elem));
             }
             for (&high_elem, acc) in high_chunk.iter().zip(accumulators.iter_mut()) {
                 *acc = high_iter(*acc, high_elem);
             }
-            // Needed to avoid unwanted autovectorization
-            accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
             *acc = low_iter(*acc, low_elem);
