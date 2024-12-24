@@ -655,9 +655,9 @@ fn addsub<T: FloatLike, const ILP: usize>(
         accumulators,
         inputs,
         #[inline(always)]
-        |acc, elem| *acc = pessimize::hide::<T>(*acc + elem),
+        |acc, elem| *acc = pessimize::hide::<T>(*acc) + elem,
         #[inline(always)]
-        |acc, elem| *acc = pessimize::hide::<T>(*acc - elem),
+        |acc, elem| *acc = pessimize::hide::<T>(*acc) - elem,
     );
 }
 
@@ -695,9 +695,9 @@ fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         accumulators,
         inputs,
         #[inline(always)]
-        |acc, elem| *acc = pessimize::hide::<T>(*acc + hidden_sqrt(elem)),
+        |acc, elem| *acc = pessimize::hide::<T>(*acc) + hidden_sqrt(elem),
         #[inline(always)]
-        |acc, elem| *acc = pessimize::hide::<T>(*acc - hidden_sqrt(elem)),
+        |acc, elem| *acc = pessimize::hide::<T>(*acc) - hidden_sqrt(elem),
     );
 }
 
@@ -731,7 +731,7 @@ fn average<T: FloatLike, const ILP: usize>(
         accumulators,
         inputs,
         #[inline(always)]
-        |acc, elem| *acc = pessimize::hide::<T>((elem + *acc) * T::splat(0.5)),
+        |acc, elem| *acc = (elem + pessimize::hide::<T>(*acc)) * T::splat(0.5),
     );
 }
 
@@ -762,7 +762,7 @@ fn mul_average<T: FloatLike, const ILP: usize>(
         accumulators,
         inputs,
         #[inline(always)]
-        move |acc, elem| *acc = pessimize::hide::<T>(((*acc * elem) + target) * T::splat(0.5)),
+        move |acc, elem| *acc = ((pessimize::hide::<T>(*acc) * elem) + target) * T::splat(0.5),
     );
 }
 
@@ -780,7 +780,7 @@ fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
         inputs,
         #[inline(always)]
         move |acc, elem| {
-            *acc = pessimize::hide::<T>((acc.mul_add(elem, halve_weight) + target) * halve_weight);
+            *acc = (pessimize::hide::<T>(*acc).mul_add(elem, halve_weight) + target) * halve_weight;
         },
     );
 }
@@ -799,7 +799,7 @@ fn fma_addend_average<T: FloatLike, const ILP: usize>(
         inputs,
         #[inline(always)]
         move |acc, elem| {
-            *acc = pessimize::hide::<T>((acc.mul_add(halve_weight, elem) + target) * halve_weight);
+            *acc = (pessimize::hide::<T>(*acc).mul_add(halve_weight, elem) + target) * halve_weight;
         },
     );
 }
@@ -828,7 +828,7 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     let (factor_inputs, addend_inputs) = inputs.split_at(inputs.len() / 2);
     let iter = #[inline(always)]
     |acc: &mut T, factor, addend| {
-        *acc = pessimize::hide::<T>((acc.mul_add(factor, addend) + target) * T::splat(0.5));
+        *acc = (pessimize::hide::<T>(*acc).mul_add(factor, addend) + target) * T::splat(0.5);
     };
     if TSeq::IS_REUSED {
         assert_eq!(inputs.len() % 2, 0);
