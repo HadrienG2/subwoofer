@@ -1,4 +1,5 @@
 #![feature(portable_simd)]
+#![feature(stmt_expr_attributes)]
 
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
@@ -653,7 +654,9 @@ fn addsub<T: FloatLike, const ILP: usize>(
     iter_halves(
         accumulators,
         inputs,
+        #[inline(always)]
         |acc, elem| *acc = pessimize::hide::<T>(*acc + elem),
+        #[inline(always)]
         |acc, elem| *acc = pessimize::hide::<T>(*acc - elem),
     );
 }
@@ -691,7 +694,9 @@ fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     iter_halves(
         accumulators,
         inputs,
+        #[inline(always)]
         |acc, elem| *acc = pessimize::hide::<T>(*acc + hidden_sqrt(elem)),
+        #[inline(always)]
         |acc, elem| *acc = pessimize::hide::<T>(*acc - hidden_sqrt(elem)),
     );
 }
@@ -722,9 +727,12 @@ fn average<T: FloatLike, const ILP: usize>(
     accumulators: &mut [T; ILP],
     inputs: impl FloatSequence<T>,
 ) {
-    iter_full(accumulators, inputs, |acc, elem| {
-        *acc = pessimize::hide::<T>((elem + *acc) * T::splat(0.5))
-    });
+    iter_full(
+        accumulators,
+        inputs,
+        #[inline(always)]
+        |acc, elem| *acc = pessimize::hide::<T>((elem + *acc) * T::splat(0.5)),
+    );
 }
 
 /// Benchmark multiplication followed by averaging
@@ -750,9 +758,12 @@ fn mul_average<T: FloatLike, const ILP: usize>(
     target: T,
     inputs: impl FloatSequence<T>,
 ) {
-    iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = pessimize::hide::<T>(((*acc * elem) + target) * T::splat(0.5))
-    });
+    iter_full(
+        accumulators,
+        inputs,
+        #[inline(always)]
+        move |acc, elem| *acc = pessimize::hide::<T>(((*acc * elem) + target) * T::splat(0.5)),
+    );
 }
 
 /// Benchmark FMA with a possibly subnormal multiplier, followed by averaging
@@ -764,9 +775,14 @@ fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
     inputs: impl FloatSequence<T>,
 ) {
     let halve_weight = T::splat(0.5);
-    iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = pessimize::hide::<T>((acc.mul_add(elem, halve_weight) + target) * halve_weight);
-    });
+    iter_full(
+        accumulators,
+        inputs,
+        #[inline(always)]
+        move |acc, elem| {
+            *acc = pessimize::hide::<T>((acc.mul_add(elem, halve_weight) + target) * halve_weight);
+        },
+    );
 }
 
 /// Benchmark FMA with a possibly subnormal addend, folowed by averaging
@@ -778,9 +794,14 @@ fn fma_addend_average<T: FloatLike, const ILP: usize>(
     inputs: impl FloatSequence<T>,
 ) {
     let halve_weight = T::splat(0.5);
-    iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = pessimize::hide::<T>((acc.mul_add(halve_weight, elem) + target) * halve_weight);
-    });
+    iter_full(
+        accumulators,
+        inputs,
+        #[inline(always)]
+        move |acc, elem| {
+            *acc = pessimize::hide::<T>((acc.mul_add(halve_weight, elem) + target) * halve_weight);
+        },
+    );
 }
 
 /// Benchmark FMA with possibly subnormal inputs, followed by averaging
@@ -805,7 +826,8 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     let mut local_accumulators = *accumulators;
     let inputs = inputs.as_ref();
     let (factor_inputs, addend_inputs) = inputs.split_at(inputs.len() / 2);
-    let iter = |acc: &mut T, factor, addend| {
+    let iter = #[inline(always)]
+    |acc: &mut T, factor, addend| {
         *acc = pessimize::hide::<T>((acc.mul_add(factor, addend) + target) * T::splat(0.5));
     };
     if TSeq::IS_REUSED {
