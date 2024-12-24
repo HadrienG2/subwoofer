@@ -212,7 +212,8 @@ Benchmarks names folow a `type/op/ilp/source/%subnormals` structure where...
   latency-bound. Higher ILP should increase execution performance until the code
   becomes throughput bound and saturates superscalar CPU backend resources, but
   the highest ILP configurations may run into microarchitectural limits (e.g.
-  CPU op cache/loop buffer trashing) that degrade runtime performance instead.
+  CPU op cache/loop buffer trashing) or optimization barrier limitations that
+  degrade runtime performance instead.
     * If you observe that the highest ILP configuration is slower than the
       next-highest configuration, I advise re-running the benchmark with
       `more_ilp_configurations` added to the set of Cargo features, in order to
