@@ -773,8 +773,9 @@ fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
     target: T,
     inputs: impl FloatSequence<T>,
 ) -> [T; ILP] {
+    let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = (acc.mul_add(elem, halve_weight) + target) * T::splat(0.5);
+        *acc = (acc.mul_add(elem, halve_weight) + target) * halve_weight;
     })
 }
 
@@ -786,8 +787,9 @@ fn fma_addend_average<T: FloatLike, const ILP: usize>(
     target: T,
     inputs: impl FloatSequence<T>,
 ) -> [T; ILP] {
+    let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = (acc.mul_add(halve_weight, elem) + target) * T::splat(0.5);
+        *acc = (acc.mul_add(halve_weight, elem) + target) * halve_weight;
     })
 }
 
