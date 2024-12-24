@@ -655,9 +655,15 @@ fn addsub<T: FloatLike, const ILP: usize>(
         accumulators,
         inputs,
         #[inline(always)]
-        |acc, elem| *acc = pessimize::hide::<T>(*acc) + elem,
+        |acc, elem| {
+            pessimize::consume::<T>(*acc);
+            *acc += elem
+        },
         #[inline(always)]
-        |acc, elem| *acc = pessimize::hide::<T>(*acc) - elem,
+        |acc, elem| {
+            pessimize::consume::<T>(*acc);
+            *acc -= elem
+        },
     );
 }
 
