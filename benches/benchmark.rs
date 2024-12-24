@@ -210,8 +210,10 @@ macro_rules! for_each_registers_and_ilp {
                 // We need 1 register per accumulator and current hardware has
                 // at most 32 float registers, so it does not make sense to
                 // compile for ILP >= 32 at this point in time as we would have
-                // no registers left for input.
-                $benchmark::<$t, $inputregs> $args with { group: &mut group, selected_ilp: $type_config.ilp, instantiated_ilps: [1, 2, 4, 8, 16] }
+                // no registers left for input. But we do need to compile in
+                // ILP32 to avoid the unimplemented error below because ILP32 is
+                // actually used for memory inputs.
+                $benchmark::<$t, $inputregs> $args with { group: &mut group, selected_ilp: $type_config.ilp, instantiated_ilps: [1, 2, 4, 8, 16, 32] }
             );
         })*
     };
