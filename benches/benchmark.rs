@@ -242,6 +242,7 @@ macro_rules! for_each_registers_and_ilp {
 }
 
 /// Run all benchmarks for a given scalar/SIMD type
+#[inline(never)] // Faster build + easier profiling
 fn benchmark_type<T: FloatLike>(
     c: &mut Criterion,
     common_config: CommonConfiguration,
@@ -310,6 +311,7 @@ struct TypeConfiguration<'group_name_prefix> {
 /// Run a certain benchmark for a certain scalar/SIMD type, using a certain
 /// degree of ILP and a certain number of register inputs.
 #[cfg(feature = "register_data_sources")]
+#[inline(never)] // Faster build + easier profiling
 fn benchmark_register_inputs<T: FloatLike, const INPUT_REGISTERS: usize, const ILP: usize>(
     benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
@@ -335,6 +337,7 @@ fn benchmark_register_inputs<T: FloatLike, const INPUT_REGISTERS: usize, const I
 
 /// Run a certain benchmark for a certain scalar/SIMD type, using a certain
 /// degree of ILP and memory inputs of a certain size.
+#[inline(never)] // Faster build + easier profiling
 fn benchmark_memory_inputs<T: FloatLike, const ILP: usize>(
     benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
@@ -364,6 +367,7 @@ fn benchmark_memory_inputs<T: FloatLike, const ILP: usize>(
 
 /// Run a certain benchmark for a certain scalar/SIMD type, using a certain
 /// degree of ILP and a certain input data configuration.
+#[inline(never)] // Faster build + easier profiling
 fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
     benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
@@ -510,7 +514,7 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                         input_name,
                         averaging_accumulator_init,
                         #[inline]
-                        |acc, inputs| mul_average(acc, average_target, inputs),
+                        |acc, inputs| mul_average(acc, inputs, average_target),
                     );
                     break 'select_benchmark;
                 }
@@ -524,7 +528,7 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                         input_name,
                         averaging_accumulator_init,
                         #[inline]
-                        |acc, inputs| fma_multiplier_average(acc, average_target, inputs),
+                        |acc, inputs| fma_multiplier_average(acc, inputs, average_target),
                     );
                     break 'select_benchmark;
                 }
@@ -538,7 +542,7 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                         input_name,
                         averaging_accumulator_init,
                         #[inline]
-                        |acc, inputs| fma_addend_average(acc, average_target, inputs),
+                        |acc, inputs| fma_addend_average(acc, inputs, average_target),
                     );
                     break 'select_benchmark;
                 }
@@ -567,7 +571,7 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                     input_name,
                     averaging_accumulator_init,
                     #[inline]
-                    |acc, inputs| fma_full_average(acc, average_target, inputs),
+                    |acc, inputs| fma_full_average(acc, inputs, average_target),
                 );
             }
             break 'select_benchmark;
@@ -576,15 +580,15 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
 }
 
 /// Run a criterion benchmark of the specified computation
-#[inline(never)] // Make most of the configuration appear in perf profiles
+#[inline(never)] // Faster build + easier profiling
 fn run_benchmark<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
     group: &mut BenchmarkGroup<WallTime>,
     mut inputs: TSet,
     input_name: String,
     accumulator_init: [T; ILP],
-    // We ask that iteration callbacks be Copy as a lint that they shouldn't
-    // capture any &mut X because pessimize::hide tends to spill them to memory
-    mut iteration: impl FnMut([T; ILP], TSet::Sequence<'_>) -> [T; ILP] + Copy,
+    // We ask that iteration callbacks be Copy as a hint that they shouldn't
+    // capture any &mut X, because pessimize::hide tends to spill them to memory
+    mut iteration: impl Copy + FnMut([T; ILP], TSet::Sequence<'_>) -> [T; ILP],
 ) {
     group.bench_function(input_name, move |b| {
         b.iter_custom(|iters| {
@@ -605,20 +609,22 @@ fn run_benchmark<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
             // Timed region, be careful with optimization barriers here
             let start = Instant::now();
             for _ in 0..iters {
-                // Note that there is no optimization barrier on inputs,
-                // because the impact on codegen was observed to be too high
-                // in the case of register inputs (lots of useless reg-reg
-                // moves in generated ASM) and we don't really need them for
+                // Note that there is no optimization barrier on inputs, because
+                // the impact on codegen was observed to be too high in the case
+                // of register inputs (useless reg-reg moves in generated ASM +
+                // extra register pressure) and we don't really need them for
                 // memory inputs (they contain too much data for the compiler to
-                // be clever and factor out iterations).
+                // be clever and factor out repeated iterations).
                 //
                 // This means that we must be careful about invalid
                 // optimizations based on compiler-observed benchmark input
                 // reuse, inside of the microbenchmarks themselves.
                 //
-                // We also need rather frequent optimization barriers on
+                // We'll also need rather frequent optimization barriers on
                 // accumulators, otherwise the compiler will autovectorize sets
-                // of narrow-width accumulators into wide SIMD registers
+                // of narrow-width accumulators into wider SIMD registers, which
+                // will get in the way of us from studying scalar/SIMD subnormal
+                // perf differences.
                 accumulators = iteration(accumulators, inputs);
             }
             let duration = start.elapsed();
@@ -659,8 +665,8 @@ fn addsub<T: FloatLike, const ILP: usize>(
     iter_halves(
         accumulators,
         inputs,
-        |acc, elem| *acc += elem,
-        |acc, elem| *acc -= elem,
+        |acc, elem| acc + elem,
+        |acc, elem| acc - elem,
     )
 }
 
@@ -686,7 +692,7 @@ fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             // (or even for the entire benchmark iteration loop).)
             //
             // This does not increase the register footprint because the code
-            // has to stores the output of the SQRT in a register that's
+            // has to store the output of the square root in a register that's
             // separate from the input register anyway.
             pessimize::hide::<T>(elem).sqrt()
         } else {
@@ -701,8 +707,8 @@ fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     iter_halves(
         accumulators,
         inputs,
-        |acc, elem| *acc += hidden_sqrt(elem),
-        |acc, elem| *acc -= hidden_sqrt(elem),
+        |acc, elem| acc + hidden_sqrt(elem),
+        |acc, elem| acc - hidden_sqrt(elem),
     )
 }
 
@@ -733,7 +739,7 @@ fn average<T: FloatLike, const ILP: usize>(
     inputs: impl FloatSequence<T>,
 ) -> [T; ILP] {
     iter_full(accumulators, inputs, |acc, elem| {
-        *acc = (elem + *acc) * T::splat(0.5)
+        (acc + elem) * T::splat(0.5)
     })
 }
 
@@ -757,11 +763,11 @@ fn average<T: FloatLike, const ILP: usize>(
 #[inline]
 fn mul_average<T: FloatLike, const ILP: usize>(
     accumulators: [T; ILP],
-    target: T,
     inputs: impl FloatSequence<T>,
+    target: T,
 ) -> [T; ILP] {
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = ((*acc * elem) + target) * T::splat(0.5)
+        ((acc * elem) + target) * T::splat(0.5)
     })
 }
 
@@ -770,12 +776,12 @@ fn mul_average<T: FloatLike, const ILP: usize>(
 #[inline]
 fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
     accumulators: [T; ILP],
-    target: T,
     inputs: impl FloatSequence<T>,
+    target: T,
 ) -> [T; ILP] {
     let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = (acc.mul_add(elem, halve_weight) + target) * halve_weight;
+        (acc.mul_add(elem, halve_weight) + target) * halve_weight
     })
 }
 
@@ -784,12 +790,12 @@ fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
 #[inline]
 fn fma_addend_average<T: FloatLike, const ILP: usize>(
     accumulators: [T; ILP],
-    target: T,
     inputs: impl FloatSequence<T>,
+    target: T,
 ) -> [T; ILP] {
     let halve_weight = T::splat(0.5);
     iter_full(accumulators, inputs, move |acc, elem| {
-        *acc = (acc.mul_add(halve_weight, elem) + target) * halve_weight;
+        (acc.mul_add(halve_weight, elem) + target) * halve_weight
     })
 }
 
@@ -809,19 +815,17 @@ fn fma_addend_average<T: FloatLike, const ILP: usize>(
 #[inline]
 fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     mut accumulators: [T; ILP],
-    target: T,
     inputs: TSeq,
+    target: T,
 ) -> [T; ILP] {
     let inputs = inputs.as_ref();
     let (factor_inputs, addend_inputs) = inputs.split_at(inputs.len() / 2);
-    let iter = move |acc: &mut T, factor, addend| {
-        *acc = (acc.mul_add(factor, addend) + target) * T::splat(0.5);
-    };
+    let iter = move |acc: T, factor, addend| (acc.mul_add(factor, addend) + target) * T::splat(0.5);
     if TSeq::IS_REUSED {
         assert_eq!(inputs.len() % 2, 0);
         for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
             for acc in accumulators.iter_mut() {
-                iter(acc, factor, addend);
+                *acc = iter(*acc, factor, addend);
             }
             // Needed to avoid unwanted autovectorization
             accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
@@ -837,7 +841,7 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
                 .zip(addend_chunk)
                 .zip(accumulators.iter_mut())
             {
-                iter(acc, factor, addend);
+                *acc = iter(*acc, factor, addend);
             }
             // Needed to avoid unwanted autovectorization
             accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
@@ -847,26 +851,24 @@ fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
             .zip(addend_remainder)
             .zip(accumulators.iter_mut())
         {
-            iter(acc, factor, addend);
+            *acc = iter(*acc, factor, addend);
         }
     }
     accumulators
 }
 
 /// Benchmark skeleton that processes the full input identically
-#[allow(unused)]
 #[inline]
 fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     mut accumulators: [T; ILP],
     inputs: TSeq,
-    mut iter: impl FnMut(&mut T, T) + Copy,
+    mut iter: impl Copy + FnMut(T, T) -> T,
 ) -> [T; ILP] {
     let inputs = inputs.as_ref();
     if TSeq::IS_REUSED {
         for &elem in inputs {
-            let mut elem = elem;
             for acc in accumulators.iter_mut() {
-                iter(acc, elem);
+                *acc = iter(*acc, elem);
             }
             // Needed to avoid unwanted autovectorization
             accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
@@ -876,26 +878,25 @@ fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         let remainder = chunks.remainder();
         for chunk in chunks {
             for (&elem, acc) in chunk.iter().zip(accumulators.iter_mut()) {
-                iter(acc, elem);
+                *acc = iter(*acc, elem);
             }
             // Needed to avoid unwanted autovectorization
             accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
-            iter(acc, elem);
+            *acc = iter(*acc, elem);
         }
     }
     accumulators
 }
 
 /// Benchmark skeleton that treats halves of the input differently
-#[allow(unused)]
 #[inline]
 fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
     mut accumulators: [T; ILP],
     inputs: TSeq,
-    mut low_iter: impl FnMut(&mut T, T) + Copy,
-    mut high_iter: impl FnMut(&mut T, T) + Copy,
+    mut low_iter: impl Copy + FnMut(T, T) -> T,
+    mut high_iter: impl Copy + FnMut(T, T) -> T,
 ) -> [T; ILP] {
     let inputs = inputs.as_ref();
     let (low_inputs, high_inputs) = inputs.split_at(inputs.len() / 2);
@@ -903,10 +904,10 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         assert_eq!(inputs.len() % 2, 0);
         for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in accumulators.iter_mut() {
-                low_iter(acc, low_elem);
+                *acc = low_iter(*acc, low_elem);
             }
             for acc in accumulators.iter_mut() {
-                high_iter(acc, high_elem);
+                *acc = high_iter(*acc, high_elem);
             }
             // Needed to avoid unwanted autovectorization
             accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
@@ -918,19 +919,19 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         let high_remainder = high_chunks.remainder();
         for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
             for (&low_elem, acc) in low_chunk.iter().zip(accumulators.iter_mut()) {
-                low_iter(acc, low_elem);
+                *acc = low_iter(*acc, low_elem);
             }
             for (&high_elem, acc) in high_chunk.iter().zip(accumulators.iter_mut()) {
-                high_iter(acc, high_elem);
+                *acc = high_iter(*acc, high_elem);
             }
             // Needed to avoid unwanted autovectorization
             accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulators);
         }
         for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
-            low_iter(acc, low_elem);
+            *acc = low_iter(*acc, low_elem);
         }
         for (&high_elem, acc) in high_remainder.iter().zip(accumulators.iter_mut()) {
-            high_iter(acc, high_elem);
+            *acc = high_iter(*acc, high_elem);
         }
     }
     accumulators
