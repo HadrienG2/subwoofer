@@ -1,30 +1,6 @@
-//! Bits that are shared by multiple benchmarks
-//!
-//! All benchmarks use one of the `iter_` inner loop skeletons, except for
-//! `fma_full` which implements its own variation of [`iter_halves()`] because
-//! FMA is the only benchmarked operation that takes two input data operands.
+//! Benchmark inner loops and associated types
 
 use crate::types::{FloatLike, FloatSequence};
-
-/// Maximum granularity of subnormal occurence probabilities
-///
-/// Higher is more precise, but the benchmark execution time in the default
-/// configuration is multipled accordingly.
-pub const MAX_SUBNORMAL_CONFIGURATIONS: usize = const {
-    if cfg!(feature = "subnormal_freq_resolution_1in128") {
-        128 // 0.78125% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in64") {
-        64 // 1.5625% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in32") {
-        32 // 3.125% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in16") {
-        16 // 6.25% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in8") {
-        8 // 12.5% granularity
-    } else {
-        4 // 25% granularity
-    }
-};
 
 /// Benchmark skeleton that processes the full input homogeneously
 #[inline]

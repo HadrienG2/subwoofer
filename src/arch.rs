@@ -24,6 +24,7 @@ pub const MIN_FLOAT_REGISTERS: usize = const {
         }
         Architecture::X86 => {
             if target.supports_feature_str("avx512f") {
+                assert!(target.supports_feature_str("avx512vl"));
                 32
             } else {
                 16

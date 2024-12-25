@@ -9,8 +9,9 @@ use std::simd::Simd;
 use std::time::Instant;
 use subwoofer::{
     arch::{HAS_MEMORY_OPERANDS, MIN_FLOAT_REGISTERS},
-    benchmarks::{self, MAX_SUBNORMAL_CONFIGURATIONS},
+    process,
     types::{FloatLike, FloatSequence, FloatSet},
+    MAX_SUBNORMAL_CONFIGURATIONS,
 };
 
 // --- Benchmark configuration and steering ---
@@ -47,76 +48,82 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let smallest_data_cache_sizes = cache_stats.smallest_data_cache_sizes();
     let max_size_to_fit = |cache_size: u64| cache_size / 2;
     let min_size_to_overflow = |cache_size: u64| cache_size * 8;
-    let memory_input_sizes = if cfg!(feature = "more_memory_data_sources") {
-        smallest_data_cache_sizes
-            .iter()
-            .copied()
-            .map(max_size_to_fit)
-            .chain(std::iter::once(min_size_to_overflow(
-                *cache_stats.total_data_cache_sizes().last().unwrap(),
-            )))
-            .map(|size| usize::try_from(size).unwrap())
-            .collect::<Vec<_>>()
-    } else {
-        vec![usize::try_from(max_size_to_fit(*smallest_data_cache_sizes.first().unwrap())).unwrap()]
-    };
+    let memory_input_sizes = smallest_data_cache_sizes
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(idx, cache_size)| (format!("L{}", idx + 1), max_size_to_fit(cache_size)))
+        .chain(std::iter::once((
+            "RAM".to_string(),
+            min_size_to_overflow(*cache_stats.total_data_cache_sizes().last().unwrap()),
+        )))
+        .take(if cfg!(feature = "more_memory_data_sources") {
+            usize::MAX
+        } else {
+            1
+        })
+        .map(|(name, size)| (name, usize::try_from(size).unwrap()))
+        .collect::<Vec<_>>();
 
-    // Then we will benchmark for each supported floating-point type
-    let config = CommonConfiguration {
-        benchmark_names: &benchmark_names,
-        memory_input_sizes: &memory_input_sizes,
-    };
+    // For each benchmark...
+    for benchmark_name in benchmark_names {
+        // Then we will benchmark for each supported floating-point type
+        let config = CommonConfiguration {
+            benchmark_name,
+            memory_input_sizes: &memory_input_sizes,
+        };
 
-    // We start with the types for which the impact of all observed effects is
-    // expected to be the highest, namely the widest SIMD types, then we go down
-    // in width until we reach scalar types.
-    //
-    // Leading zeros in the SIMD type names are a workaround for criterion's
-    // poor benchmark name sorting logic. You will find a lot more of these
-    // workarounds throughout this codebase...
-    #[cfg(feature = "simd")]
-    {
-        // TODO: Expand pessimize's SIMD support in order to to cover more SIMD
-        //       types from NEON, SVE, RISC-V vector extensions... The way this
-        //       benchmark is currently designed, we can support any vector
-        //       instruction set for which the following two conditions are met:
+        // We start with the types for which the impact of all observed effects is
+        // expected to be the highest, namely the widest SIMD types, then we go down
+        // in width until we reach scalar types.
         //
-        //       1. The portable Simd type from std implements a conversion to
-        //          and from a matching architectural SIMD type.
-        //       2. Rust's inline ASM, which we use as our optimization barrier,
-        //          accepts SIMD register operands of that type.
-        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-        benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        // Leading zeros in the SIMD type names are a workaround for criterion's
+        // poor benchmark name sorting logic. You will find a lot more of these
+        // workarounds throughout this codebase...
+        #[cfg(feature = "simd")]
         {
-            #[cfg(target_feature = "avx512f")]
-            {
-                benchmark_type::<Simd<f32, 16>>(c, config, "f32x16");
-                benchmark_type::<Simd<f64, 8>>(c, config, "f64x08");
-            }
-            #[cfg(target_feature = "avx")]
-            {
-                benchmark_type::<Simd<f32, 8>>(c, config, "f32x08");
-                benchmark_type::<Simd<f64, 4>>(c, config, "f64x04");
-            }
-            #[cfg(target_feature = "sse")]
-            benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
-            #[cfg(target_feature = "sse2")]
+            // TODO: Expand pessimize's SIMD support in order to to cover more SIMD
+            //       types from NEON, SVE, RISC-V vector extensions... The way this
+            //       benchmark is currently designed, we can support any vector
+            //       instruction set for which the following two conditions are met:
+            //
+            //       1. The portable Simd type from std implements a conversion to
+            //          and from a matching architectural SIMD type.
+            //       2. Rust's inline ASM, which we use as our optimization barrier,
+            //          accepts SIMD register operands of that type.
+            #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
             benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                #[cfg(target_feature = "avx512f")]
+                {
+                    benchmark_type::<Simd<f32, 16>>(c, config, "f32x16");
+                    benchmark_type::<Simd<f64, 8>>(c, config, "f64x08");
+                }
+                #[cfg(target_feature = "avx")]
+                {
+                    benchmark_type::<Simd<f32, 8>>(c, config, "f32x08");
+                    benchmark_type::<Simd<f64, 4>>(c, config, "f64x04");
+                }
+                #[cfg(target_feature = "sse")]
+                benchmark_type::<Simd<f32, 4>>(c, config, "f32x04");
+                #[cfg(target_feature = "sse2")]
+                benchmark_type::<Simd<f64, 2>>(c, config, "f64x02");
+            }
         }
+        benchmark_type::<f32>(c, config, "f32");
+        benchmark_type::<f64>(c, config, "f64");
     }
-    benchmark_type::<f32>(c, config, "f32");
-    benchmark_type::<f64>(c, config, "f64");
 }
 
 /// Configuration that is common to all benchmarks
 #[derive(Copy, Clone)]
 struct CommonConfiguration<'a> {
     /// Operations that are being benchmarked
-    benchmark_names: &'a [&'static str],
+    benchmark_name: &'static str,
 
     /// Sizes (in bytes) of the memory inputs that benchmarks are fed with
-    memory_input_sizes: &'a [usize],
+    memory_input_sizes: &'a [(String, usize)],
 }
 
 /// Benchmark a certain data type in a certain ILP configurations, using input
@@ -228,55 +235,41 @@ macro_rules! for_each_registers_and_ilp {
 #[inline(never)] // Faster build + easier profiling
 fn benchmark_type<T: FloatLike>(
     c: &mut Criterion,
-    common_config: CommonConfiguration,
+    common_config: CommonConfiguration<'_>,
     tname: &str,
 ) {
-    // For each benchmarked operation...
-    for benchmark_name in common_config.benchmark_names {
-        // ...and for each supported degree of ILP...
-        for ilp in (0..=MIN_FLOAT_REGISTERS.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
-            // Name this (type, benchmark, ilp) triplet
-            let ilp_name = if ilp == 1 {
-                "chained".to_string()
-            } else {
-                // Leading zeros works around poor criterion bench name sorting
-                format!("ilp{ilp:02}")
+    // ...and for each supported degree of ILP...
+    for ilp in (0..=MIN_FLOAT_REGISTERS.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
+        // Name this (type, benchmark, ilp) triplet
+        let ilp_name = if ilp == 1 {
+            "chained".to_string()
+        } else {
+            // Leading zeros works around poor criterion bench name sorting
+            format!("ilp{ilp:02}")
+        };
+        let group_name_prefix = format!("{}/{tname}/{ilp_name}", common_config.benchmark_name);
+
+        // Benchmark with input data that fits in CPU registers
+        #[cfg(feature = "register_data_sources")]
+        {
+            let type_config = TypeConfiguration {
+                ilp,
+                group_name_prefix: &group_name_prefix,
             };
-            let group_name_prefix = format!("{tname}/{benchmark_name}/{ilp_name}");
+            for_each_registers_and_ilp!(benchmark_register_inputs::<T>(benchmark_name) with { criterion: c, type_config: &type_config });
+        }
 
-            // Benchmark with input data that fits in CPU registers
-            #[cfg(feature = "register_data_sources")]
-            {
-                let type_config = TypeConfiguration {
-                    ilp,
-                    group_name_prefix: &group_name_prefix,
-                };
-                for_each_registers_and_ilp!(benchmark_register_inputs::<T>(benchmark_name) with { criterion: c, type_config: &type_config });
-            }
+        // Benchmark with input data that fits in L1, L2, ... all the way to RAM
+        for (data_source_name, input_size) in common_config.memory_input_sizes.iter() {
+            // Allocate storage for input data
+            let num_elems = *input_size / std::mem::size_of::<T>();
+            let mut input_storage = vec![T::default(); num_elems];
 
-            // Benchmark with input data that fits in L1, L2, ... all the way to RAM
-            for (idx, &input_size) in common_config.memory_input_sizes.iter().enumerate() {
-                // Allocate storage for input data
-                let num_elems = input_size / std::mem::size_of::<T>();
-                let mut input_storage = vec![T::default(); num_elems];
+            // Set up a criterion group for this input configuration
+            let mut group = c.benchmark_group(format!("{group_name_prefix}/{data_source_name}"));
 
-                // Set up a criterion group for this input configuration
-                let data_source_name = if cfg!(feature = "more_memory_data_sources") {
-                    if idx < common_config.memory_input_sizes.len() - 1 {
-                        format!("L{}cache", idx + 1)
-                    } else {
-                        "RAM".to_string()
-                    }
-                } else {
-                    assert_eq!(common_config.memory_input_sizes.len(), 1);
-                    "L1cache".to_string()
-                };
-                let mut group =
-                    c.benchmark_group(format!("{group_name_prefix}/{data_source_name}"));
-
-                // Run the benchmarks at each supported ILP level
-                for_each_ilp!(benchmark_memory_inputs::<T>(benchmark_name, &mut group, &mut input_storage) with { selected_ilp: ilp });
-            }
+            // Run the benchmarks at each supported ILP level
+            for_each_ilp!(benchmark_memory_inputs::<T>(common_config.benchmark_name, &mut group, &mut input_storage) with { selected_ilp: ilp });
         }
     }
 }
@@ -564,7 +557,7 @@ fn run_benchmark<'inputs, T: FloatLike, Inputs: FloatSet<T> + 'inputs, const ILP
     mut inputs: Inputs,
     input_name: String,
     accumulator_init: [T; ILP],
-    iteration: impl BenchmarkIteration<T, Inputs, ILP>,
+    iteration: impl Benchmark<T, Inputs, ILP>,
 ) {
     group.bench_function(input_name, move |b| {
         b.iter_custom(|iters| {
@@ -586,7 +579,7 @@ fn run_benchmark<'inputs, T: FloatLike, Inputs: FloatSet<T> + 'inputs, const ILP
             // optimizations must be reviewed very carefully.
             let start = Instant::now();
             for _ in 0..iters {
-                let (next_accs, next_inputs) = iteration.iterate(accumulators, inputs);
+                let (next_accs, next_inputs) = iteration.process_inputs(accumulators, inputs);
                 accumulators = next_accs;
                 inputs = next_inputs;
             }
@@ -635,8 +628,13 @@ fn run_benchmark<'inputs, T: FloatLike, Inputs: FloatSet<T> + 'inputs, const ILP
 /// not appropriate when the data that we're using is supposed to stay resident
 /// in CPU registers. To avoid this, all state mutation operations should be
 /// carried out using by-value `Fn(T) -> T` style APIs.
-trait BenchmarkIteration<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize>: Copy {
-    fn iterate(
+trait Benchmark<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize>: Copy {
+    /// TODO: Generate an instance (put accumulator_init into it, extract
+    ///       functions to generate additive/multiplicative accumulators and
+    ///       remove it from process_inputs set)
+
+    /// Process a batch of inputs once using the benchmarked workload
+    fn process_inputs(
         self,
         accs: [T; ILP],
         inputs: Inputs::Sequence<'_>,
@@ -667,18 +665,16 @@ mod addsub {
     #[derive(Clone, Copy)]
     pub(super) struct AddSub;
     //
-    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
-        for AddSub
-    {
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> Benchmark<T, Inputs, ILP> for AddSub {
         #[inline]
-        fn iterate(
+        fn process_inputs(
             self,
             accumulators: [T; ILP],
             inputs: Inputs::Sequence<'_>,
         ) -> ([T; ILP], Inputs::Sequence<'_>) {
             // No need for input hiding here, the compiler cannot do anything dangerous
             // with the knowledge that inputs are always the same in this benchmark.
-            benchmarks::iter_halves::<_, _, ILP, false>(
+            process::iter_halves::<_, _, ILP, false>(
                 accumulators,
                 inputs,
                 |acc, elem| acc + elem,
@@ -705,11 +701,11 @@ mod sqrt_positive_addsub {
     #[derive(Clone, Copy)]
     pub(super) struct SqrtPositiveAddSub;
     //
-    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> Benchmark<T, Inputs, ILP>
         for SqrtPositiveAddSub
     {
         #[inline]
-        fn iterate(
+        fn process_inputs(
             self,
             accumulators: [T; ILP],
             inputs: Inputs::Sequence<'_>,
@@ -722,12 +718,7 @@ mod sqrt_positive_addsub {
                 // computations and reuse their result for all accumulators (in
                 // fact it would even be allowed to reuse them for the entire
                 // outer iters loop in run_benchmark).
-                benchmarks::iter_halves::<_, _, ILP, true>(
-                    accumulators,
-                    inputs,
-                    low_iter,
-                    high_iter,
-                )
+                process::iter_halves::<_, _, ILP, true>(accumulators, inputs, low_iter, high_iter)
             } else {
                 // Memory inputs do not need to be hidden because each
                 // accumulator gets its own input substream (preventing square
@@ -736,12 +727,7 @@ mod sqrt_positive_addsub {
                 // for a whole arbitrarily large dynamically-sized batch of
                 // input data.
                 assert!(Inputs::NUM_REGISTER_INPUTS.is_none());
-                benchmarks::iter_halves::<_, _, ILP, false>(
-                    accumulators,
-                    inputs,
-                    low_iter,
-                    high_iter,
-                )
+                process::iter_halves::<_, _, ILP, false>(accumulators, inputs, low_iter, high_iter)
             }
         }
     }
@@ -780,16 +766,14 @@ mod average {
     #[derive(Clone, Copy)]
     pub(super) struct Average;
     //
-    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
-        for Average
-    {
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> Benchmark<T, Inputs, ILP> for Average {
         #[inline]
-        fn iterate(
+        fn process_inputs(
             self,
             accumulators: [T; ILP],
             inputs: Inputs::Sequence<'_>,
         ) -> ([T; ILP], Inputs::Sequence<'_>) {
-            benchmarks::iter_full(accumulators, inputs, |acc, elem| {
+            process::iter_full(accumulators, inputs, |acc, elem| {
                 (acc + elem) * T::splat(0.5)
             })
         }
@@ -823,16 +807,16 @@ mod mul_average {
         pub target: T,
     }
     //
-    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> Benchmark<T, Inputs, ILP>
         for MulAverage<T>
     {
         #[inline]
-        fn iterate(
+        fn process_inputs(
             self,
             accumulators: [T; ILP],
             inputs: Inputs::Sequence<'_>,
         ) -> ([T; ILP], Inputs::Sequence<'_>) {
-            benchmarks::iter_full(accumulators, inputs, move |acc, elem| {
+            process::iter_full(accumulators, inputs, move |acc, elem| {
                 (acc * elem + self.target) * T::splat(0.5)
             })
         }
@@ -852,17 +836,17 @@ mod fma_multiplier_average {
         pub target: T,
     }
     //
-    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> Benchmark<T, Inputs, ILP>
         for FmaMultiplierAverage<T>
     {
         #[inline]
-        fn iterate(
+        fn process_inputs(
             self,
             accumulators: [T; ILP],
             inputs: Inputs::Sequence<'_>,
         ) -> ([T; ILP], Inputs::Sequence<'_>) {
             let halve_weight = T::splat(0.5);
-            benchmarks::iter_full(accumulators, inputs, move |acc, elem| {
+            process::iter_full(accumulators, inputs, move |acc, elem| {
                 (acc.mul_add(elem, halve_weight) + self.target) * halve_weight
             })
         }
@@ -881,17 +865,17 @@ mod fma_addend_average {
         pub target: T,
     }
     //
-    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> Benchmark<T, Inputs, ILP>
         for FmaAddendAverage<T>
     {
         #[inline]
-        fn iterate(
+        fn process_inputs(
             self,
             accumulators: [T; ILP],
             inputs: Inputs::Sequence<'_>,
         ) -> ([T; ILP], Inputs::Sequence<'_>) {
             let halve_weight = T::splat(0.5);
-            benchmarks::iter_full(accumulators, inputs, move |acc, elem| {
+            process::iter_full(accumulators, inputs, move |acc, elem| {
                 (acc.mul_add(halve_weight, elem) + self.target) * halve_weight
             })
         }
@@ -921,11 +905,11 @@ mod fma_full_average {
         pub target: T,
     }
     //
-    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> Benchmark<T, Inputs, ILP>
         for FmaFullAverage<T>
     {
         #[inline]
-        fn iterate(
+        fn process_inputs(
             self,
             mut accumulators: [T; ILP],
             inputs: Inputs::Sequence<'_>,
@@ -941,7 +925,7 @@ mod fma_full_average {
                     for acc in accumulators.iter_mut() {
                         *acc = iter(*acc, factor, addend);
                     }
-                    accumulators = benchmarks::hide_accumulators(accumulators);
+                    accumulators = process::hide_accumulators(accumulators);
                 }
             } else {
                 let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -956,7 +940,7 @@ mod fma_full_average {
                     {
                         *acc = iter(*acc, factor, addend);
                     }
-                    accumulators = benchmarks::hide_accumulators(accumulators);
+                    accumulators = process::hide_accumulators(accumulators);
                 }
                 for ((&factor, &addend), acc) in factor_remainder
                     .iter()
