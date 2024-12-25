@@ -6,6 +6,7 @@ use hwlocality::Topology;
 use pessimize::Pessimize;
 use rand::{distributions::Uniform, prelude::*};
 use std::{
+    num::NonZeroUsize,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     simd::{LaneCount, Simd, StdFloat, SupportedLaneCount},
     time::Instant,
@@ -446,14 +447,7 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
         #[cfg(feature = "bench_addsub")]
         if benchmark_name == "addsub" {
             if should_check_ilp(0, aux_registers_direct_memop) {
-                run_benchmark(
-                    group,
-                    inputs,
-                    input_name,
-                    additive_accumulator_init,
-                    #[inline]
-                    |acc, inputs| addsub(acc, inputs),
-                );
+                run_benchmark(group, inputs, input_name, additive_accumulator_init, AddSub);
             }
             break 'select_benchmark;
         }
@@ -472,8 +466,7 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                     inputs,
                     input_name,
                     additive_accumulator_init,
-                    #[inline]
-                    |acc, inputs| sqrt_positive_addsub(acc, inputs),
+                    SqrtPositiveAddSub,
                 );
             }
             break 'select_benchmark;
@@ -501,8 +494,7 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                         inputs,
                         input_name,
                         averaging_accumulator_init,
-                        #[inline]
-                        |acc, inputs| average(acc, inputs),
+                        Average,
                     );
                     break 'select_benchmark;
                 }
@@ -515,8 +507,9 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                         inputs,
                         input_name,
                         averaging_accumulator_init,
-                        #[inline]
-                        |acc, inputs| mul_average(acc, inputs, average_target),
+                        MulAverage {
+                            target: average_target,
+                        },
                     );
                     break 'select_benchmark;
                 }
@@ -529,8 +522,9 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                         inputs,
                         input_name,
                         averaging_accumulator_init,
-                        #[inline]
-                        |acc, inputs| fma_multiplier_average(acc, inputs, average_target),
+                        FmaMultiplierAverage {
+                            target: average_target,
+                        },
                     );
                     break 'select_benchmark;
                 }
@@ -543,8 +537,9 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                         inputs,
                         input_name,
                         averaging_accumulator_init,
-                        #[inline]
-                        |acc, inputs| fma_addend_average(acc, inputs, average_target),
+                        FmaAddendAverage {
+                            target: average_target,
+                        },
                     );
                     break 'select_benchmark;
                 }
@@ -572,8 +567,9 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
                     inputs,
                     input_name,
                     averaging_accumulator_init,
-                    #[inline]
-                    |acc, inputs| fma_full_average(acc, inputs, average_target),
+                    FmaFullAverage {
+                        target: average_target,
+                    },
                 );
             }
             break 'select_benchmark;
@@ -583,18 +579,16 @@ fn benchmark_input_set<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
 
 /// Run a criterion benchmark of the specified computation
 #[inline(never)] // Faster build + easier profiling
-fn run_benchmark<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
+fn run_benchmark<'inputs, T: FloatLike, Inputs: FloatSet<T> + 'inputs, const ILP: usize>(
     group: &mut BenchmarkGroup<WallTime>,
-    mut inputs: TSet,
+    mut inputs: Inputs,
     input_name: String,
     accumulator_init: [T; ILP],
-    // We ask that iteration callbacks be Copy as a hint that they shouldn't
-    // capture any &mut X, because pessimize::hide tends to spill them to memory
-    mut iteration: impl Copy + FnMut([T; ILP], TSet::Sequence<'_>) -> [T; ILP],
+    iteration: impl BenchmarkIteration<T, Inputs, ILP>,
 ) {
     group.bench_function(input_name, move |b| {
         b.iter_custom(|iters| {
-            // For each benchmark iteration batch, we make sure that...
+            // For each benchmark iteration batch, we ensure that...
             //
             // - The compiler cannot leverage the fact that the initial
             //   accumulators are always the same in order to eliminate
@@ -606,325 +600,486 @@ fn run_benchmark<T: FloatLike, TSet: FloatSet<T>, const ILP: usize>(
             //   before the timer starts, eliminating possible bias for small
             //   numbers of iterations vs large numbers of iterations.
             let mut accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulator_init);
-            let inputs = inputs.make_sequence();
+            let mut inputs = inputs.make_sequence();
 
-            // Timed region, be careful with optimization barriers here
+            // Timed region, this is the danger zone where inlining and compiler
+            // optimizations must be reviewed very carefully.
             let start = Instant::now();
             for _ in 0..iters {
-                // Note that there is no optimization barrier on inputs, because
-                // the impact on codegen was observed to be too high in the case
-                // of register inputs (useless reg-reg moves in generated ASM +
-                // extra register pressure) and we don't really need them for
-                // memory inputs (they contain too much data for the compiler to
-                // be clever and factor out repeated iterations).
-                //
-                // This means that we must be careful about invalid
-                // optimizations based on compiler-observed benchmark input
-                // reuse, inside of the microbenchmarks themselves.
-                //
-                // We'll also need rather frequent optimization barriers on
-                // accumulators, otherwise the compiler will autovectorize sets
-                // of narrow-width accumulators into wider SIMD registers, which
-                // will get in the way of us from studying scalar/SIMD subnormal
-                // perf differences.
-                accumulators = iteration(accumulators, inputs);
+                let (next_accs, next_inputs) = iteration.iterate(accumulators, inputs);
+                accumulators = next_accs;
+                inputs = next_inputs;
             }
-            let duration = start.elapsed();
+            let elapsed = start.elapsed();
 
-            // Make the compiler think that the output of the computation is
-            // used, so that the optimizer cannot delete the whole computation.
+            // Tell the compiler that the accumulated results are used so it
+            // doesn't delete the computation
             for acc in accumulators {
                 pessimize::consume::<T>(acc);
             }
-            duration
+            elapsed
         });
     });
 }
 
+/// Workload that is being benchmarked by the inner loop of [`run_benchmark()`]
+///
+/// Takes a set of accumulators and a set of input data to be integrated into
+/// them. Returns the updated accumulators and the original input data, but this
+/// latter fact may or may not be hidden from the compiler's optimizer using a
+/// [`pessimize::hide()`] optimization barrier.
+///
+/// Such an optimization barrier needs to be applied in benchmarks where the
+/// compiler can perform unwanted optimizations (like hoisting one of the
+/// operations whose performance we are trying to benchmark out of the inner
+/// loop) if it knows that the inputs are always the same. It should not be used
+/// when that is not the case as `pessimize::hide()` can cause harmful
+/// side-effects like preventing the use of ASM memory operands.
+///
+/// A `T::hide_accumulator()` optimization barrier also needs to be applied to
+/// each intermediary result before storing it back into the accumulator array.
+/// That's because if the underlying data flow is fully exposed to LLVM, it will
+/// figure out that we are doing similar things to each accumulator in an array,
+/// using data from an identically sized slice of input data, and then it is
+/// likely to try to be helpful by vectorizing the resulting array computation.
+/// Unfortunately, this optimization is not wanted here because we want to
+/// separately measure the overhead of subnormal numbers on scalar and SIMD
+/// computations, and we cannot do that when our scalar computations are
+/// helpfully turned into more SIMD computations by the compiler...
+///
+/// Finally, we ask that iteration callbacks be `Copy` as a hint that they
+/// shouldn't capture any outer mutable data via `&mut X`. That's because at the
+/// time of writing, the `pessimize::hide()` optimization barrier that we use
+/// has the unfortunate side-effect of making rustc/LLVM spill the target of
+/// there mutable references to memory and load them back from memory. This is
+/// not appropriate when the data that we're using is supposed to stay resident
+/// in CPU registers. To avoid this, all state mutation operations should be
+/// carried out using by-value `Fn(T) -> T` style APIs.
+trait BenchmarkIteration<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize>: Copy {
+    fn iterate(
+        self,
+        accs: [T; ILP],
+        inputs: Inputs::Sequence<'_>,
+    ) -> ([T; ILP], Inputs::Sequence<'_>);
+}
+
 // --- Actual benchmarks ---
 
-/// Benchmark addition and subtraction
-///
-/// This is just a random additive walk of ~unity or subnormal step, so given a
-/// high enough starting point, an initially normal accumulator should stay in
-/// the normal range forever.
-///
-/// This benchmark directly integrates each input into the accumulator, hence...
-///
-/// - On architectures with memory operands, all CPU registers can always be
-///   used for register inputs and accumulators.
-/// - On architectures without memory operands...
-///   * When operating from register inputs, all CPU registers that are not used
-///     as inputs can be used as accumulators.
-///   * When operating from memory, one CPU register must be reserved for memory
-///     loads. The remaining CPU registers can be used as accumulators.
 #[cfg(feature = "bench_addsub")]
-#[inline]
-fn addsub<T: FloatLike, const ILP: usize>(
-    accumulators: [T; ILP],
-    inputs: impl FloatSequence<T>,
-) -> [T; ILP] {
-    iter_halves(
-        accumulators,
-        inputs,
-        |acc, elem| acc + elem,
-        |acc, elem| acc - elem,
-    )
-}
+mod addsub {
+    use super::*;
 
-/// Benchmark square root of positive numbers, followed by add/sub cycle
-///
-/// Square roots of negative numbers may or may not be emulated in software.
-/// They are thus not a good candidate for CPU microbenchmarking.
-///
-/// Square roots must be stored in one temporary register before add/sub,
-/// therefore one CPU register must always be reserved for square root
-/// temporaries, in addition to the registers used for inputs and accumulators.
-#[cfg(feature = "bench_sqrt_positive_addsub")]
-#[inline]
-fn sqrt_positive_addsub<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
-    accumulators: [T; ILP],
-    inputs: TSeq,
-) -> [T; ILP] {
-    let hidden_sqrt = |elem: T| {
-        if TSeq::IS_REUSED {
-            // Need this optimization barrier in the case of reused register
-            // inputs, so that the compiler doesn't abusively factor out the
-            // square root computation and reuse the result for all accumulators
-            // (it might even reuse them for the entire outer iters loop in
-            // run_benchmark someday if it got clever enough).
-            //
-            // This does not increase the register footprint because the code
-            // has to store the output of the square root in a register that's
-            // separate from the input register anyway.
-            pessimize::hide::<T>(elem).sqrt()
-        } else {
-            // No need in the case of non-reused memory inputs: each accumulator
-            // gets a different element from the input buffer to work with, and
-            // current compilers are not crazy enough to precompute square roots
-            // for a whole arbitrarily large batch of input data.
-            assert!(TSeq::NUM_REGISTER_INPUTS.is_none());
-            elem.sqrt()
-        }
-    };
-    iter_halves(
-        accumulators,
-        inputs,
-        |acc, elem| acc + hidden_sqrt(elem),
-        |acc, elem| acc - hidden_sqrt(elem),
-    )
-}
-
-/// For multiplicative benchmarks, we're going to need to an extra
-/// averaging operation, otherwise once we've multiplied by a subnormal
-/// we'll stay in subnormal range forever.
-///
-/// It cannot be just an addition, because otherwise if we have no subnormal
-/// input we get unbounded growth, which is also a problem.
-///
-/// This benchmark measures the overhead of averaging with an in-register input
-/// in isolation, so that it can be subtracted from the overhead of X +
-/// averaging (with due respect paid to the existence of superscalar execution).
-///
-/// At least one CPU register must be reserved to the averaging weight. Then...
-///
-/// - If the input comes from registers, no further CPU register needs to
-///   reserved because the initial accumulator register can be reused for (acc +
-///   elem), and then the product of that by the averaging weight.
-/// - If the input comes from memory, then we need one extra CPU register for
-///   the input memory load on architectures without memory operands, before it
-///   can be summed with the accumulator. This is not necessary on architectures
-///   with memory operands.
-#[cfg(feature = "bench_average")]
-#[inline]
-fn average<T: FloatLike, const ILP: usize>(
-    accumulators: [T; ILP],
-    inputs: impl FloatSequence<T>,
-) -> [T; ILP] {
-    iter_full(accumulators, inputs, |acc, elem| {
-        (acc + elem) * T::splat(0.5)
-    })
-}
-
-/// Benchmark multiplication followed by averaging
-///
-/// At least two CPU registers must be reserved to the averaging target and
-/// weight. Then...
-///
-/// - If the input comes from registers, no further CPU register needs to
-///   reserved because the initial accumulator register can be reused for (acc *
-///   elem), then for sum with target, then for product by averaging weight.
-/// - If the input comes from memory, then we need one extra CPU register for
-///   the input memory load on architectures without memory operands, before it
-///   can be multiplied by the accumulator and stored into the former
-///   accumulator register. No such extra register is needed on architectures
-///   with memory operands.
-///
-/// This is also true of all of the following `_average` computations that take
-/// a single input from the input data set.
-#[cfg(feature = "bench_mul_average")]
-#[inline]
-fn mul_average<T: FloatLike, const ILP: usize>(
-    accumulators: [T; ILP],
-    inputs: impl FloatSequence<T>,
-    target: T,
-) -> [T; ILP] {
-    iter_full(accumulators, inputs, move |acc, elem| {
-        ((acc * elem) + target) * T::splat(0.5)
-    })
-}
-
-/// Benchmark FMA with a possibly subnormal multiplier, followed by averaging
-#[cfg(feature = "bench_fma_multiplier_average")]
-#[inline]
-fn fma_multiplier_average<T: FloatLike, const ILP: usize>(
-    accumulators: [T; ILP],
-    inputs: impl FloatSequence<T>,
-    target: T,
-) -> [T; ILP] {
-    let halve_weight = T::splat(0.5);
-    iter_full(accumulators, inputs, move |acc, elem| {
-        (acc.mul_add(elem, halve_weight) + target) * halve_weight
-    })
-}
-
-/// Benchmark FMA with a possibly subnormal addend, folowed by averaging
-#[cfg(feature = "bench_fma_addend_average")]
-#[inline]
-fn fma_addend_average<T: FloatLike, const ILP: usize>(
-    accumulators: [T; ILP],
-    inputs: impl FloatSequence<T>,
-    target: T,
-) -> [T; ILP] {
-    let halve_weight = T::splat(0.5);
-    iter_full(accumulators, inputs, move |acc, elem| {
-        (acc.mul_add(halve_weight, elem) + target) * halve_weight
-    })
-}
-
-/// Benchmark FMA with possibly subnormal inputs, followed by averaging
-///
-/// In addition to the CPU registers used for register inputs and accumulators,
-/// this benchmark consumes...
-///
-/// - A minimum or two CPU registers for the averaging target and weight
-/// - For memory inputs...
-///   * One extra CPU register for at least one of the FMA memory operands,
-///     because even on architecturs with memory operands, FMA can only take at
-///     most one such operand.
-///   * One extra CPU register for the other FMA memory operands on
-///     architectures without memory operands.
-#[cfg(feature = "bench_fma_full_average")]
-#[inline]
-fn fma_full_average<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
-    mut accumulators: [T; ILP],
-    inputs: TSeq,
-    target: T,
-) -> [T; ILP] {
-    let inputs = inputs.as_ref();
-    let (factor_inputs, addend_inputs) = inputs.split_at(inputs.len() / 2);
-    let iter = move |acc: T, factor, addend| (acc.mul_add(factor, addend) + target) * T::splat(0.5);
-    if TSeq::IS_REUSED {
-        assert_eq!(inputs.len() % 2, 0);
-        for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
-            for acc in accumulators.iter_mut() {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(iter(*acc, factor, addend));
-            }
-        }
-    } else {
-        let factor_chunks = factor_inputs.chunks_exact(ILP);
-        let addend_chunks = addend_inputs.chunks_exact(ILP);
-        let factor_remainder = factor_chunks.remainder();
-        let addend_remainder = addend_chunks.remainder();
-        for (factor_chunk, addend_chunk) in factor_chunks.zip(addend_chunks) {
-            for ((&factor, &addend), acc) in factor_chunk
-                .iter()
-                .zip(addend_chunk)
-                .zip(accumulators.iter_mut())
-            {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(iter(*acc, factor, addend));
-            }
-        }
-        for ((&factor, &addend), acc) in factor_remainder
-            .iter()
-            .zip(addend_remainder)
-            .zip(accumulators.iter_mut())
-        {
-            *acc = iter(*acc, factor, addend);
+    /// Benchmark addition and subtraction
+    ///
+    /// This is just a random additive walk of ~unity or subnormal step, so given a
+    /// high enough starting point, an initially normal accumulator should stay in
+    /// the normal range forever.
+    ///
+    /// This benchmark directly integrates each input into the accumulator, hence...
+    ///
+    /// - On architectures with memory operands, all CPU registers can always be
+    ///   used for register inputs and accumulators.
+    /// - On architectures without memory operands...
+    ///   * When operating from register inputs, all CPU registers that are not used
+    ///     as inputs can be used as accumulators.
+    ///   * When operating from memory, one CPU register must be reserved for memory
+    ///     loads. The remaining CPU registers can be used as accumulators.
+    #[derive(Clone, Copy)]
+    pub(super) struct AddSub;
+    //
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+        for AddSub
+    {
+        #[inline]
+        fn iterate(
+            self,
+            accumulators: [T; ILP],
+            inputs: Inputs::Sequence<'_>,
+        ) -> ([T; ILP], Inputs::Sequence<'_>) {
+            // No need for input hiding here, the compiler cannot do anything dangerous
+            // with the knowledge that inputs are always the same in this benchmark.
+            iter_halves::<_, _, ILP, false>(
+                accumulators,
+                inputs,
+                |acc, elem| acc + elem,
+                |acc, elem| acc - elem,
+            )
         }
     }
-    accumulators
 }
+#[cfg(feature = "bench_addsub")]
+use addsub::AddSub;
 
-/// Benchmark skeleton that processes the full input identically
-#[inline]
-fn iter_full<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
-    mut accumulators: [T; ILP],
-    inputs: TSeq,
-    mut iter: impl Copy + FnMut(T, T) -> T,
-) -> [T; ILP] {
-    let inputs = inputs.as_ref();
-    if TSeq::IS_REUSED {
-        for &elem in inputs {
-            for acc in accumulators.iter_mut() {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(iter(*acc, elem));
+#[cfg(feature = "bench_sqrt_positive_addsub")]
+mod sqrt_positive_addsub {
+    use super::*;
+
+    /// Benchmark square root of positive numbers, followed by add/sub cycle
+    ///
+    /// Square roots of negative numbers may or may not be emulated in software.
+    /// They are thus not a good candidate for CPU microbenchmarking.
+    ///
+    /// Square roots must be stored in one temporary register before add/sub,
+    /// therefore one CPU register must always be reserved for square root
+    /// temporaries, in addition to the registers used for inputs and accumulators.
+    #[derive(Clone, Copy)]
+    pub(super) struct SqrtPositiveAddSub;
+    //
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+        for SqrtPositiveAddSub
+    {
+        #[inline]
+        fn iterate(
+            self,
+            accumulators: [T; ILP],
+            inputs: Inputs::Sequence<'_>,
+        ) -> ([T; ILP], Inputs::Sequence<'_>) {
+            let low_iter = |acc, elem: T| acc + elem.sqrt();
+            let high_iter = |acc, elem: T| acc - elem.sqrt();
+            if Inputs::IS_REUSED {
+                // Need to hide reused register inputs, so that the compiler doesn't
+                // abusively factor out the redundant square root computations and reuse
+                // their result for all accumulators (in fact it would even be allowed
+                // to reuse them for the entire outer iters loop in run_benchmark).
+                iter_halves::<_, _, ILP, true>(accumulators, inputs, low_iter, high_iter)
+            } else {
+                // Memory inputs do not need to be hidden because each accumulator gets
+                // its own input substream (preventing square root reuse during the
+                // inner loop over accumulators) and current LLVM is not crazy enough to
+                // precompute square roots for a whole arbitrarily large
+                // dynamically-sized batch of input data.
+                assert!(Inputs::NUM_REGISTER_INPUTS.is_none());
+                iter_halves::<_, _, ILP, false>(accumulators, inputs, low_iter, high_iter)
             }
         }
+    }
+}
+#[cfg(feature = "bench_sqrt_positive_addsub")]
+use sqrt_positive_addsub::SqrtPositiveAddSub;
+
+#[cfg(feature = "bench_average")]
+mod average {
+    use super::*;
+
+    /// Benchmark rolling average with some data inputs.
+    ///
+    /// For multiplicative benchmarks, we're going to need to an extra averaging
+    /// operation, otherwise once we've multiplied by a subnormal we'll stay in
+    /// subnormal range forever.
+    ///
+    /// It cannot be just an addition, because otherwise if we have no subnormal
+    /// input we get unbounded growth, which is also a problem.
+    ///
+    /// This benchmark measures the overhead of averaging with an in-register
+    /// input in isolation, so that it can be subtracted from the overhead of X
+    /// + averaging (with due respect paid to the existence of superscalar
+    /// execution).
+    ///
+    /// At least one CPU register must be reserved to the averaging weight.
+    /// Then...
+    ///
+    /// - If the input comes from registers, no further CPU register needs to
+    ///   reserved because the initial accumulator register can be reused for
+    ///   (acc + elem), and then the product of that by the averaging weight.
+    /// - If the input comes from memory, then we need one extra CPU register
+    ///   for the input memory load on architectures without memory operands,
+    ///   before it can be summed with the accumulator. This is not necessary on
+    ///   architectures with memory operands.
+    #[derive(Clone, Copy)]
+    pub(super) struct Average;
+    //
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+        for Average
+    {
+        #[inline]
+        fn iterate(
+            self,
+            accumulators: [T; ILP],
+            inputs: Inputs::Sequence<'_>,
+        ) -> ([T; ILP], Inputs::Sequence<'_>) {
+            iter_full(accumulators, inputs, |acc, elem| {
+                (acc + elem) * T::splat(0.5)
+            })
+        }
+    }
+}
+#[cfg(feature = "bench_average")]
+use average::Average;
+
+#[cfg(feature = "bench_mul_average")]
+mod mul_average {
+    use super::*;
+
+    /// Benchmark multiplication followed by averaging
+    ///
+    /// At least two CPU registers must be reserved to the averaging target and
+    /// weight. Then...
+    ///
+    /// - If the input comes from registers, no further CPU register needs to
+    ///   reserved because the initial accumulator register can be reused for (acc *
+    ///   elem), then for sum with target, then for product by averaging weight.
+    /// - If the input comes from memory, then we need one extra CPU register for
+    ///   the input memory load on architectures without memory operands, before it
+    ///   can be multiplied by the accumulator and stored into the former
+    ///   accumulator register. No such extra register is needed on architectures
+    ///   with memory operands.
+    ///
+    /// This is also true of all of the following `_average` computations that take
+    /// a single input from the input data set.
+    #[derive(Clone, Copy)]
+    pub(super) struct MulAverage<T: FloatLike> {
+        pub target: T,
+    }
+    //
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+        for MulAverage<T>
+    {
+        #[inline]
+        fn iterate(
+            self,
+            accumulators: [T; ILP],
+            inputs: Inputs::Sequence<'_>,
+        ) -> ([T; ILP], Inputs::Sequence<'_>) {
+            iter_full(accumulators, inputs, move |acc, elem| {
+                (acc * elem + self.target) * T::splat(0.5)
+            })
+        }
+    }
+}
+#[cfg(feature = "bench_mul_average")]
+use mul_average::MulAverage;
+
+#[cfg(feature = "bench_fma_multiplier_average")]
+mod fma_multiplier_average {
+    use super::*;
+
+    /// Benchmark FMA with a possibly subnormal multiplier, followed by
+    /// averaging
+    #[derive(Clone, Copy)]
+    pub(super) struct FmaMultiplierAverage<T: FloatLike> {
+        pub target: T,
+    }
+    //
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+        for FmaMultiplierAverage<T>
+    {
+        #[inline]
+        fn iterate(
+            self,
+            accumulators: [T; ILP],
+            inputs: Inputs::Sequence<'_>,
+        ) -> ([T; ILP], Inputs::Sequence<'_>) {
+            let halve_weight = T::splat(0.5);
+            iter_full(accumulators, inputs, move |acc, elem| {
+                (acc.mul_add(elem, halve_weight) + self.target) * halve_weight
+            })
+        }
+    }
+}
+#[cfg(feature = "bench_fma_multiplier_average")]
+use fma_multiplier_average::FmaMultiplierAverage;
+
+#[cfg(feature = "bench_fma_addend_average")]
+mod fma_addend_average {
+    use super::*;
+
+    /// Benchmark FMA with a possibly subnormal addend, followed by averaging
+    #[derive(Clone, Copy)]
+    pub(super) struct FmaAddendAverage<T: FloatLike> {
+        pub target: T,
+    }
+    //
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+        for FmaAddendAverage<T>
+    {
+        #[inline]
+        fn iterate(
+            self,
+            accumulators: [T; ILP],
+            inputs: Inputs::Sequence<'_>,
+        ) -> ([T; ILP], Inputs::Sequence<'_>) {
+            let halve_weight = T::splat(0.5);
+            iter_full(accumulators, inputs, move |acc, elem| {
+                (acc.mul_add(halve_weight, elem) + self.target) * halve_weight
+            })
+        }
+    }
+}
+#[cfg(feature = "bench_fma_addend_average")]
+use fma_addend_average::FmaAddendAverage;
+
+#[cfg(feature = "bench_fma_full_average")]
+mod fma_full_average {
+    use super::*;
+
+    /// Benchmark FMA with possibly subnormal inputs, followed by averaging
+    ///
+    /// In addition to the CPU registers used for register inputs and accumulators,
+    /// this benchmark consumes...
+    ///
+    /// - A minimum or two CPU registers for the averaging target and weight
+    /// - For memory inputs...
+    ///   * One extra CPU register for at least one of the FMA memory operands,
+    ///     because even on architecturs with memory operands, FMA can only take at
+    ///     most one such operand.
+    ///   * One extra CPU register for the other FMA memory operands on
+    ///     architectures without memory operands.
+    #[derive(Clone, Copy)]
+    pub(super) struct FmaFullAverage<T: FloatLike> {
+        pub target: T,
+    }
+    //
+    impl<T: FloatLike, Inputs: FloatSet<T>, const ILP: usize> BenchmarkIteration<T, Inputs, ILP>
+        for FmaFullAverage<T>
+    {
+        #[inline]
+        fn iterate(
+            self,
+            mut accumulators: [T; ILP],
+            inputs: Inputs::Sequence<'_>,
+        ) -> ([T; ILP], Inputs::Sequence<'_>) {
+            let iter = move |acc: T, factor, addend| {
+                (acc.mul_add(factor, addend) + self.target) * T::splat(0.5)
+            };
+            let inputs_slice = inputs.as_ref();
+            let (factor_inputs, addend_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
+            if Inputs::IS_REUSED {
+                assert_eq!(factor_inputs.len(), addend_inputs.len());
+                for (&factor, &addend) in factor_inputs.iter().zip(addend_inputs) {
+                    for acc in accumulators.iter_mut() {
+                        *acc = iter(*acc, factor, addend);
+                    }
+                    accumulators = hide_accumulators(accumulators);
+                }
+            } else {
+                let factor_chunks = factor_inputs.chunks_exact(ILP);
+                let addend_chunks = addend_inputs.chunks_exact(ILP);
+                let factor_remainder = factor_chunks.remainder();
+                let addend_remainder = addend_chunks.remainder();
+                for (factor_chunk, addend_chunk) in factor_chunks.zip(addend_chunks) {
+                    for ((&factor, &addend), acc) in factor_chunk
+                        .iter()
+                        .zip(addend_chunk)
+                        .zip(accumulators.iter_mut())
+                    {
+                        *acc = iter(*acc, factor, addend);
+                    }
+                    accumulators = hide_accumulators(accumulators);
+                }
+                for ((&factor, &addend), acc) in factor_remainder
+                    .iter()
+                    .zip(addend_remainder)
+                    .zip(accumulators.iter_mut())
+                {
+                    *acc = iter(*acc, factor, addend);
+                }
+            }
+            (accumulators, inputs)
+        }
+    }
+}
+#[cfg(feature = "bench_fma_full_average")]
+use fma_full_average::FmaFullAverage;
+
+/// Benchmark skeleton that processes the full input homogeneously
+#[inline]
+fn iter_full<T: FloatLike, Inputs: FloatSequence<T>, const ILP: usize>(
+    mut accumulators: [T; ILP],
+    inputs: Inputs,
+    mut iter: impl Copy + FnMut(T, T) -> T,
+) -> ([T; ILP], Inputs) {
+    let inputs_slice = inputs.as_ref();
+    if Inputs::IS_REUSED {
+        for &elem in inputs_slice {
+            for acc in accumulators.iter_mut() {
+                *acc = iter(*acc, elem);
+            }
+            accumulators = hide_accumulators(accumulators);
+        }
     } else {
-        let chunks = inputs.chunks_exact(ILP);
+        let chunks = inputs_slice.chunks_exact(ILP);
         let remainder = chunks.remainder();
         for chunk in chunks {
             for (&elem, acc) in chunk.iter().zip(accumulators.iter_mut()) {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(iter(*acc, elem));
+                *acc = iter(*acc, elem);
             }
+            accumulators = hide_accumulators(accumulators);
         }
         for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
             *acc = iter(*acc, elem);
         }
     }
-    accumulators
+    (accumulators, inputs)
 }
 
-/// Benchmark skeleton that treats halves of the input differently
+/// Benchmark skeleton that treats each half of the input differently
 #[inline]
-fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
+fn iter_halves<
+    T: FloatLike,
+    Inputs: FloatSequence<T>,
+    const ILP: usize,
+    const HIDE_INPUTS: bool,
+>(
     mut accumulators: [T; ILP],
-    inputs: TSeq,
+    mut inputs: Inputs,
     mut low_iter: impl Copy + FnMut(T, T) -> T,
     mut high_iter: impl Copy + FnMut(T, T) -> T,
-) -> [T; ILP] {
-    let inputs = inputs.as_ref();
-    let (low_inputs, high_inputs) = inputs.split_at(inputs.len() / 2);
-    if TSeq::IS_REUSED {
-        assert_eq!(inputs.len() % 2, 0);
-        for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
+) -> ([T; ILP], Inputs) {
+    if Inputs::IS_REUSED {
+        if HIDE_INPUTS {
+            // When we need to hide inputs, we flip the order of iteration over
+            // inputs and accumulators so that each set of inputs is fully
+            // processed before we switch accumulators.
+            //
+            // This ensures that the optimization barrier is maximally allowed
+            // to reuse the same registers for the original and hidden inputs,
+            // at the expense of making it harder for the CPU to extract ILP if
+            // the backend doesn't reorder instructions because the CPU frontend
+            // must now dive through N mentions of the same accumulator before
+            // reaching mentions of another accumulator (no unroll & jam).
             for acc in accumulators.iter_mut() {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(low_iter(*acc, low_elem));
+                let inputs_slice = inputs.as_ref();
+                let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
+                assert_eq!(low_inputs.len(), high_inputs.len());
+                for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
+                    *acc = low_iter(*acc, low_elem);
+                    *acc = high_iter(*acc, high_elem);
+                }
+                // Autovectorization barrier must target one accumulator at a
+                // time here due to the input/accumulator loop transpose.
+                *acc = pessimize::hide::<T>(*acc);
+                inputs = <Inputs as FloatSequence<T>>::hide(inputs);
             }
-            for acc in accumulators.iter_mut() {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(high_iter(*acc, high_elem));
+        } else {
+            // Otherwise, we just do the same as usual, but with input reuse
+            let inputs_slice = inputs.as_ref();
+            let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
+            assert_eq!(low_inputs.len(), high_inputs.len());
+            for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
+                for acc in accumulators.iter_mut() {
+                    *acc = low_iter(*acc, low_elem);
+                    *acc = high_iter(*acc, high_elem);
+                }
+                accumulators = hide_accumulators(accumulators);
             }
         }
     } else {
+        let inputs_slice = inputs.as_ref();
+        let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
         let low_chunks = low_inputs.chunks_exact(ILP);
         let high_chunks = high_inputs.chunks_exact(ILP);
         let low_remainder = low_chunks.remainder();
         let high_remainder = high_chunks.remainder();
         for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
-            for (&low_elem, acc) in low_chunk.iter().zip(accumulators.iter_mut()) {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(low_iter(*acc, low_elem));
+            for ((&low_elem, &high_elem), acc) in low_chunk
+                .iter()
+                .zip(high_chunk.iter())
+                .zip(accumulators.iter_mut())
+            {
+                *acc = low_iter(*acc, low_elem);
+                *acc = high_iter(*acc, high_elem);
             }
-            for (&high_elem, acc) in high_chunk.iter().zip(accumulators.iter_mut()) {
-                // Barrier needed to avoid unwanted autovectorization
-                *acc = pessimize::hide::<T>(high_iter(*acc, high_elem));
-            }
+            accumulators = hide_accumulators(accumulators);
         }
         for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
             *acc = low_iter(*acc, low_elem);
@@ -932,6 +1087,53 @@ fn iter_halves<T: FloatLike, TSeq: FloatSequence<T>, const ILP: usize>(
         for (&high_elem, acc) in high_remainder.iter().zip(accumulators.iter_mut()) {
             *acc = high_iter(*acc, high_elem);
         }
+    }
+    (accumulators, inputs)
+}
+
+/// Minimal optimization barrier needed to avoid accumulator autovectorization
+///
+/// If we accumulate data naively, LLVM will figure out that we're aggregating
+/// arrays of inputs into identically sized arrays of accumulators and helpfully
+/// autovectorize the accumulation. We do not want this optimization here
+/// because it gets in the way of us separately studying the hardware overhead
+/// of scalar and SIMD operations.
+///
+/// Therefore, we send accumulators to opaque inline ASM via `pessimize::hide()`
+/// after ~each accumulation iteration so that LLVM is forced to run the
+/// computations on the actual specified data type, or more precisely decides to
+/// do so because the overhead of assembling data in wide vectors then
+/// re-splitting it into narrow vectores is higher than the performance gain of
+/// autovectorizing.
+///
+/// Unfortunately, such frequent optimization barriers come with side effects
+/// like useless register-register moves and a matching increase in FP register
+/// pressure. To reduce and ideally fully eliminate the impact, it is better to
+/// send only a subset of the accumulators through the optimization barrier, and
+/// to refrain from using it altogether in situations where autovectorization is
+/// not known to be possible. This is what this function does.
+#[inline]
+fn hide_accumulators<T: FloatLike, const ILP: usize>(mut accumulators: [T; ILP]) -> [T; ILP] {
+    // No need for pessimize::hide() optimization barriers if this accumulation
+    // cannot be autovectorized because e.g. we are operating at the maximum
+    // hardware-supported SIMD vector width.
+    let Some(min_vector_ilp) = T::MIN_VECTORIZABLE_ILP else {
+        return accumulators;
+    };
+
+    // Otherwise apply pessimize::hide() to a set of accumulators which is large
+    // enough that there aren't enough remaining non-hidden accumulators left
+    // for the compiler to perform autovectorization.
+    //
+    // If rustc/LLVM ever becomes crazy enough to autovectorize with masked SIMD
+    // operations, then this -1 may need to become a /2 or worse, depending on
+    // how efficient the compiler estimates that masked SIMD operations are on
+    // the CPU target that the benchmark will run on. It's debatable whether
+    // this is best handled here or in the definition of MIN_VECTORIZABLE_ILP.
+    let max_elided_barriers = min_vector_ilp.get() - 1;
+    let min_hidden_accs = ILP.saturating_sub(max_elided_barriers);
+    for acc in accumulators.iter_mut().take(min_hidden_accs) {
+        *acc = pessimize::hide::<T>(*acc);
     }
     accumulators
 }
@@ -1021,6 +1223,22 @@ trait FloatLike:
         result
     }
 
+    /// Minimal number of accumulators of this type that the compiler needs to
+    /// autovectorize the accumulation.
+    ///
+    /// `None` means that this accumulator type has the maximal supported width
+    /// for this hardware. Therefore autovectorization is impossible and
+    /// `pessimize::hide()` barriers on accumulators can be omitted.
+    ///
+    /// If we don't know for the active hardware, we return `Some(2)` as a safe
+    /// default, which means that all but one accumulator will need to go
+    /// through a `pessimize::hide()` optimization barrier.
+    ///
+    /// This is a workaround for rustc/LLVM spilling accumulators to memory when
+    /// they are passed through `pessimize::hide()` in benchmarks that operates
+    /// from memory inputs. See [`hide_accumulators()`] for more context.
+    const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize>;
+
     // We're also gonna need some float data & ops not exposed via std traits
     const MANTISSA_DIGITS: u32;
     fn splat(x: f32) -> Self;
@@ -1038,6 +1256,27 @@ impl FloatLike for f32 {
         let dist = Uniform::new(2.0f32.powi(-149), 2.0f32.powi(-126));
         move |rng| rng.sample(dist)
     }
+
+    const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
+        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+            // Ignoring MMX, 3DNow!, and other legacy 64-bit x86 SIMD
+            // instruction sets which are not supported by compilers anymore
+            if cfg!(any(target_arch = "x86_64", target_feature = "sse")) {
+                // rustc has been observed to generate code for half-vectors of
+                // f32, likely because they can be moved using a single movsd
+                NonZeroUsize::new(2)
+            } else if cfg!(target_feature = "avx") {
+                NonZeroUsize::new(8)
+            } else if cfg!(target_feature = "avx512f") {
+                NonZeroUsize::new(16)
+            } else {
+                None
+            }
+        } else {
+            // TODO: Investigate other hardware
+            NonZeroUsize::new(2)
+        }
+    };
 
     const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
 
@@ -1067,6 +1306,23 @@ impl FloatLike for f64 {
         let dist = Uniform::new(2.0f64.powi(-1074), 2.0f64.powi(-1022));
         move |rng| rng.sample(dist)
     }
+
+    const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
+        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+            if cfg!(any(target_arch = "x86_64", target_feature = "sse2")) {
+                NonZeroUsize::new(2)
+            } else if cfg!(target_feature = "avx") {
+                NonZeroUsize::new(4)
+            } else if cfg!(target_feature = "avx512f") {
+                NonZeroUsize::new(8)
+            } else {
+                None
+            }
+        } else {
+            // TODO: Investigate other hardware
+            NonZeroUsize::new(2)
+        }
+    };
 
     const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
 
@@ -1101,6 +1357,41 @@ where
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
+    const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
+        if WIDTH == 1 {
+            f32::MIN_VECTORIZABLE_ILP
+        } else if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+            match WIDTH {
+                16 => {
+                    assert!(cfg!(target_feature = "avx512f"));
+                    None
+                }
+                8 => {
+                    assert!(cfg!(target_feature = "avx"));
+                    if cfg!(target_feature = "avx512f") {
+                        NonZeroUsize::new(2)
+                    } else {
+                        None
+                    }
+                }
+                4 => {
+                    assert!(cfg!(any(target_arch = "x86_64", target_feature = "sse")));
+                    if cfg!(target_feature = "avx") {
+                        NonZeroUsize::new(2)
+                    } else if cfg!(target_feature = "avx512f") {
+                        NonZeroUsize::new(4)
+                    } else {
+                        None
+                    }
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // TODO: Investigate other hardware
+            NonZeroUsize::new(2)
+        }
+    };
+
     const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
 
     #[inline]
@@ -1133,6 +1424,41 @@ where
         let sampler = f64::subnormal_sampler();
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
+
+    const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
+        if WIDTH == 1 {
+            f64::MIN_VECTORIZABLE_ILP
+        } else if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+            match WIDTH {
+                8 => {
+                    assert!(cfg!(target_feature = "avx512f"));
+                    None
+                }
+                4 => {
+                    assert!(cfg!(target_feature = "avx"));
+                    if cfg!(target_feature = "avx512f") {
+                        NonZeroUsize::new(2)
+                    } else {
+                        None
+                    }
+                }
+                2 => {
+                    assert!(cfg!(any(target_arch = "x86_64", target_feature = "sse2")));
+                    if cfg!(target_feature = "avx") {
+                        NonZeroUsize::new(2)
+                    } else if cfg!(target_feature = "avx512f") {
+                        NonZeroUsize::new(4)
+                    } else {
+                        None
+                    }
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // TODO: Investigate other hardware
+            NonZeroUsize::new(2)
+        }
+    };
 
     const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
 
@@ -1248,8 +1574,11 @@ trait FloatSequence<T: FloatLike>: AsRef<[T]> + Copy {
 //
 impl<T: FloatLike, const N: usize> FloatSequence<T> for [T; N] {
     #[inline]
-    fn hide(self) -> Self {
-        self.map(pessimize::hide::<T>)
+    fn hide(mut self) -> Self {
+        for elem in self.iter_mut() {
+            *elem = pessimize::hide::<T>(*elem);
+        }
+        self
     }
 
     const NUM_REGISTER_INPUTS: Option<usize> = Some(N);
@@ -1268,7 +1597,7 @@ impl<T: FloatLike> FloatSequence<T> for &[T] {
     const IS_REUSED: bool = false;
 }
 
-// --- Microarchitectural information ---
+// --- Other microarchitectural information ---
 
 /// Lower bound on the number of architectural scalar/SIMD registers.
 ///

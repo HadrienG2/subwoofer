@@ -137,5 +137,9 @@ harness = false
 [profile.release]
 # Good for perf profiling
 debug = "line-tables-only"
-# Reproducible performance at the cost of longer compile times
+# Sadly needed for pessimize::hide() to be compiled efficiently. Without it, no
+# amount of inlining and LTO can save rustc nightly 2024-12-06 from spilling
+# accumulators to memory in benchmarks with memory data sources. It is not clear
+# to me why that is the case, most likely multiple codegen units get in the way
+# of an important whole-program optimization.
 codegen-units = 1
