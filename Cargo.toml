@@ -1,7 +1,13 @@
-[package]
-name = "subwoofer"
+[workspace]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+
+[package]
+name = "subwoofer"
+version.workspace = true
+edition.workspace = true
 
 [features]
 # If you are running this benchmark on hardware which you only have temporary
@@ -118,14 +124,21 @@ subnormal_freq_resolution_1in128 = []
 # TODO: Add configurations and adjust "measure" configuration if we find
 #       hardware where <1% resolution is still not enough
 
-[dependencies]
-
-[dev-dependencies]
-criterion = "0.5"
-hwlocality = "1.0.0-alpha"
+[workspace.dependencies]
 pessimize = { version = "2.0", features = ["nightly"] }
 rand = "0.8.5"
 target-features = "0.1"
+criterion = "0.5"
+hwlocality = "1.0.0-alpha"
+
+[dependencies]
+pessimize.workspace = true
+rand.workspace = true
+target-features.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+hwlocality.workspace = true
 
 [lib]
 bench = false
