@@ -9,9 +9,9 @@ use std::simd::Simd;
 use std::time::Instant;
 use subwoofer::{
     arch::{HAS_MEMORY_OPERANDS, MIN_FLOAT_REGISTERS},
+    inputs::{FloatSequence, FloatSet, MAX_SUBNORMAL_CONFIGURATIONS},
     process,
-    types::{FloatLike, FloatSequence, FloatSet},
-    MAX_SUBNORMAL_CONFIGURATIONS,
+    types::FloatLike,
 };
 
 // --- Benchmark configuration and steering ---
@@ -297,7 +297,8 @@ fn benchmark_register_inputs<T: FloatLike, const INPUT_REGISTERS: usize, const I
     for subnormal_share in 0..=num_subnormal_configurations {
         // Generate input data
         let num_subnormals = subnormal_share * INPUT_REGISTERS / num_subnormal_configurations;
-        let inputs = T::generate_positive_input_array::<INPUT_REGISTERS>(num_subnormals);
+        let mut inputs = [T::default(); INPUT_REGISTERS];
+        inputs.generate_positive(&mut rand::thread_rng(), num_subnormals);
 
         // Name this subnormal configuration
         let input_name = format!(
@@ -317,15 +318,15 @@ fn benchmark_register_inputs<T: FloatLike, const INPUT_REGISTERS: usize, const I
 fn benchmark_memory_inputs<T: FloatLike, const ILP: usize>(
     benchmark_name: &'static str,
     group: &mut BenchmarkGroup<WallTime>,
-    input_storage: &mut [T],
+    mut input_storage: &mut [T],
 ) {
     // Iterate over subnormal configurations
     for subnormal_probability in 0..=MAX_SUBNORMAL_CONFIGURATIONS {
         // Generate input data
         let subnormal_probability =
             subnormal_probability as f64 / MAX_SUBNORMAL_CONFIGURATIONS as f64;
-        T::generate_positive_inputs(
-            input_storage,
+        input_storage.generate_positive(
+            &mut rand::thread_rng(),
             (subnormal_probability * input_storage.len() as f64).round() as usize,
         );
 
@@ -573,7 +574,7 @@ fn run_benchmark<'inputs, T: FloatLike, Inputs: FloatSet<T> + 'inputs, const ILP
             //   before the timer starts, eliminating possible bias for small
             //   numbers of iterations vs large numbers of iterations.
             let mut accumulators = <[T; ILP] as FloatSequence<T>>::hide(accumulator_init);
-            let mut inputs = inputs.make_sequence();
+            let mut inputs = inputs.make_sequence(&mut rand::thread_rng());
 
             // Timed region, this is the danger zone where inlining and compiler
             // optimizations must be reviewed very carefully.

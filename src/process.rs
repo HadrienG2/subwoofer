@@ -1,6 +1,6 @@
 //! Benchmark inner loops and associated types
 
-use crate::types::{FloatLike, FloatSequence};
+use crate::{inputs::FloatSequence, types::FloatLike};
 
 /// Benchmark skeleton that processes the full input homogeneously
 #[inline]
