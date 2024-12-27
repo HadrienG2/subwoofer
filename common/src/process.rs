@@ -1,10 +1,147 @@
 //! Benchmark inner loops and associated types
 
-use crate::{inputs::FloatSequence, types::FloatLike};
+use crate::{
+    inputs::{FloatSequence, FloatSet},
+    types::FloatLike,
+};
+use criterion::{measurement::WallTime, BenchmarkGroup, Throughput};
+use rand::prelude::*;
+use std::time::Instant;
+
+/// Floating-point operation that can be benchmarked
+pub trait Operation<T: FloatLike>: Copy {
+    /// Name given to this operation in criterion benchmark outputs
+    const NAME: &str;
+
+    /// Minimal number of CPU registers used when processing in-register inputs,
+    /// besides these inputs and the benchmark's inner accumulators.
+    ///
+    /// Used to decide which degrees of accumulation ILP are worth trying.
+    ///
+    /// This assumes the compiler does a perfect job at register allocation,
+    /// which unfortunately is not always true, especially in the presence of
+    /// optimization barriers like `pessimize::hide()` that may have the
+    /// side-effect of artificially increasing register pressure.
+    const AUX_REGISTERS_REGOP: usize;
+
+    /// Like `AUX_REGISTERS_MEMOP`, but for memory operands
+    const AUX_REGISTERS_MEMOP: usize;
+
+    /// Narrow down the degree of instruction-level parallelism of accumulation
+    fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T>;
+}
+//
+/// Microbenchmark of a certain [`Operation`]
+pub trait Benchmark: Copy {
+    /// Floating-point type that is being exercised
+    type Float: FloatLike;
+
+    /// Run this criterion benchmark
+    fn run<Inputs: FloatSet<Element = Self::Float>>(
+        mut self,
+        group: &mut BenchmarkGroup<WallTime>,
+        mut inputs: Inputs,
+        input_name: String,
+        mut rng: impl Rng,
+    ) {
+        group.throughput(Throughput::Elements(Self::num_operations(&inputs) as u64));
+        group.bench_function(input_name, move |b| {
+            b.iter_custom(|iters| {
+                // For each benchmark iteration batch, we ensure that...
+                //
+                // - The compiler cannot leverage the fact that the initial
+                //   accumulators are always the same in order to eliminate
+                //   "redundant" computations across iteration batches.
+                // - Inputs are randomly reordered from one batch to another, which
+                //   will avoid input order-related hardware bias if criterion runs
+                //   enough batches (as it does in its default configuration).
+                self.begin_run(&mut rng);
+                let mut inputs = inputs.make_sequence(&mut rng);
+
+                // Timed region, this is the danger zone where inlining and compiler
+                // optimizations must be reviewed very carefully.
+                let start = Instant::now();
+                for _ in 0..iters {
+                    let (next_self, next_inputs) = self.integrate_inputs(inputs);
+                    self = next_self;
+                    inputs = next_inputs;
+                }
+                let elapsed = start.elapsed();
+
+                // Tell the compiler that the accumulated results are used so it
+                // doesn't delete the computation
+                self.consume_outputs();
+                elapsed
+            })
+        });
+    }
+
+    /// Number of hardware operations under study that this benchmark will
+    /// execute when processing a certain input dataset
+    fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize;
+
+    /// Start a new benchmark run
+    ///
+    /// This is the point where a benchmark should initialize its internal
+    /// state: accumulators, averaging targets, etc. Ideally, the state should
+    /// be fully regenerated from some suitable random distribution on each run
+    /// to avoid measurement bias linked to multiple runs with a the same
+    /// initial state. But if generating the state from an RNG is too expensive,
+    /// a reused state can be passed through [`pessimize::hide()`] instead.
+    fn begin_run(&mut self, rng: impl Rng);
+
+    /// Integrate a new batch of inputs into the internal state
+    ///
+    /// Inputs must be returned in a state suitable for reuse on the next
+    /// benchmark loop iteration. In most cases, they can just be returned
+    /// as-is, but if the compiler can hoist computations out of the benchmark
+    /// loop under the knowledge that the inputs are always the same, then you
+    /// will have to pass inputs through a `pessimize::hide()` barrier, which
+    /// may come at the expense of less optimal codegen.
+    ///
+    /// You will also want to regularly pass accumulators through
+    /// [`hide_accumulators()`], otherwise the compiler will perform unwanted
+    /// autovectorization and you will be unable to compare scalar vs SIMD
+    /// overhead. See the `integrate_xyz` skeletons below for examples.
+    ///
+    /// Implementations should be marked `#[inline]` as this function will be
+    /// repeatedly called as part of the timed benchmark run.
+    fn integrate_inputs<Inputs>(self, inputs: Inputs) -> (Self, Inputs)
+    where
+        Inputs: FloatSequence<Element = Self::Float>;
+
+    /// End a benchmark run by making the compiler think the output is used
+    ///
+    /// Pass benchmark accumulators through [`consume_accumulators()`] so that
+    /// the compiler believes that the output of this benchmark run is used.
+    fn consume_outputs(self);
+}
+
+/// Initialize accumulators for an additive random walk benchmark
+pub fn additive_accumulators<T: FloatLike, const ILP: usize>(mut rng: impl Rng) -> [T; ILP] {
+    // For additive random walks, a large initial accumulator value maximally
+    // protects against descending into subnormal range as the accumulator value
+    // gets smaller, and a small initial accumulator value maximally protects
+    // against roundoff error as the accumulator value gets bigger. Both could
+    // theoretically affect arithmetic perf on hypothetical Sufficiently Smart
+    // Hardware from the future, so we protect against both equally.
+    let normal_sampler = T::normal_sampler();
+    std::array::from_fn::<_, ILP, _>(|_| {
+        T::splat(2.0f32.powi((T::MANTISSA_DIGITS / 2) as i32)) * normal_sampler(&mut rng)
+    })
+}
+
+/// Initialize accumulators for a multiplicative random walk benchmark
+pub fn multiplicative_accumulators<T: FloatLike, const ILP: usize>(mut rng: impl Rng) -> [T; ILP] {
+    // For multiplicative random walks, accumulators close to 1 maximally
+    // protect against exponent overflow and underflow.
+    let normal_sampler = T::normal_sampler();
+    std::array::from_fn::<_, ILP, _>(|_| normal_sampler(&mut rng))
+}
 
 /// Benchmark skeleton that processes the full input homogeneously
 #[inline]
-pub fn iter_full<T: FloatLike, Inputs: FloatSequence<T>, const ILP: usize>(
+pub fn integrate_full<T: FloatLike, Inputs: FloatSequence<Element = T>, const ILP: usize>(
     mut accumulators: [T; ILP],
     inputs: Inputs,
     mut iter: impl Copy + FnMut(T, T) -> T,
@@ -35,9 +172,9 @@ pub fn iter_full<T: FloatLike, Inputs: FloatSequence<T>, const ILP: usize>(
 
 /// Benchmark skeleton that treats each half of the input differently
 #[inline]
-pub fn iter_halves<
+pub fn integrate_halves<
     T: FloatLike,
-    Inputs: FloatSequence<T>,
+    Inputs: FloatSequence<Element = T>,
     const ILP: usize,
     const HIDE_INPUTS: bool,
 >(
@@ -69,7 +206,7 @@ pub fn iter_halves<
                 // Autovectorization barrier must target one accumulator at a
                 // time here due to the input/accumulator loop transpose.
                 *acc = pessimize::hide::<T>(*acc);
-                inputs = <Inputs as FloatSequence<T>>::hide(inputs);
+                inputs = <Inputs as FloatSequence>::hide(inputs);
             }
         } else {
             // Otherwise, we just do the same as usual, but with input reuse
@@ -165,4 +302,11 @@ pub fn hide_accumulators<T: FloatLike, const ILP: usize>(mut accumulators: [T; I
         *acc = pessimize::hide::<T>(*acc);
     }
     accumulators
+}
+
+/// Consume accumulators at the end of a benchmark run
+pub fn consume_accumulators<T: FloatLike, const ILP: usize>(accs: [T; ILP]) {
+    for acc in accs {
+        pessimize::consume::<T>(acc)
+    }
 }

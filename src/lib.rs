@@ -1,6 +1,1 @@
-#![feature(portable_simd)]
-
-pub mod arch;
-pub mod inputs;
-pub mod process;
-pub mod types;
+//! Nothing here yet, please check out benches/benchmark.rs

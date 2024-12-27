@@ -1,0 +1,13 @@
+[package]
+name = "common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+criterion.workspace = true
+pessimize.workspace = true
+rand.workspace = true
+target-features.workspace = true
+
+[lib]
+bench = false

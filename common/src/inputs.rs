@@ -3,26 +3,6 @@
 use crate::types::FloatLike;
 use rand::prelude::*;
 
-/// Maximum granularity of subnormal occurence probabilities
-///
-/// Higher is more precise, but the benchmark execution time in the default
-/// configuration is multipled accordingly.
-pub const MAX_SUBNORMAL_CONFIGURATIONS: usize = const {
-    if cfg!(feature = "subnormal_freq_resolution_1in128") {
-        128 // 0.78125% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in64") {
-        64 // 1.5625% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in32") {
-        32 // 3.125% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in16") {
-        16 // 6.25% granularity
-    } else if cfg!(feature = "subnormal_freq_resolution_1in8") {
-        8 // 12.5% granularity
-    } else {
-        4 // 25% granularity
-    }
-};
-
 /// Unordered collection of benchmark inputs, to be ordered before use
 ///
 /// For sufficiently small collections of inputs (register inputs being the
@@ -55,25 +35,32 @@ pub const MAX_SUBNORMAL_CONFIGURATIONS: usize = const {
 /// The former is achieved by `T::generate_positive_inputs()`, while the latter
 /// is achieved by an input reordering step between benchmark iteration batches.
 /// The `FloatSet`/`FloatSequence` dichotomy enforces such a reordering step.
-pub trait FloatSet<T: FloatLike>: AsMut<[T]> {
+pub trait FloatSet: AsMut<[Self::Element]> {
+    /// Floating-point elements that compose this set
+    type Element: FloatLike;
+
+    /// Number of elements of this type inside of the set, accounting for
+    /// accumulator reuse
+    fn reused_len(&self, num_accumulators: usize) -> usize;
+
     /// Fill this set with a certain proportion of positive normal and subnormal
     /// inputs, taken from `T::normal_sampler()` and `T::subnormal_sampler()`
     fn generate_positive<R: Rng>(&mut self, rng: &mut R, num_subnormals: usize) {
         let slice = self.as_mut();
         assert!(num_subnormals <= slice.len());
         let (subnormal_target, normal_target) = slice.split_at_mut(num_subnormals);
-        let subnormal = T::subnormal_sampler::<R>();
+        let subnormal = Self::Element::subnormal_sampler::<R>();
         for target in subnormal_target {
             *target = subnormal(rng);
         }
-        let normal = T::normal_sampler::<R>();
+        let normal = Self::Element::normal_sampler::<R>();
         for target in normal_target {
             *target = normal(rng);
         }
     }
 
     /// Ordered sequence of inputs, borrowed from this set
-    type Sequence<'a>: FloatSequence<T>
+    type Sequence<'a>: FloatSequence<Element = Self::Element>
     where
         Self: 'a;
 
@@ -86,7 +73,17 @@ pub trait FloatSet<T: FloatLike>: AsMut<[T]> {
     const NUM_REGISTER_INPUTS: Option<usize> = Self::Sequence::<'_>::NUM_REGISTER_INPUTS;
 }
 //
-impl<T: FloatLike, const N: usize> FloatSet<T> for [T; N] {
+impl<T: FloatLike, const N: usize> FloatSet for [T; N] {
+    type Element = T;
+
+    fn reused_len(&self, num_accumulators: usize) -> usize {
+        N * if <Self as FloatSet>::IS_REUSED {
+            num_accumulators
+        } else {
+            1
+        }
+    }
+
     type Sequence<'a>
         = Self
     where
@@ -95,11 +92,22 @@ impl<T: FloatLike, const N: usize> FloatSet<T> for [T; N] {
     #[inline]
     fn make_sequence(&mut self, rng: &mut impl Rng) -> Self {
         self.shuffle(rng);
-        <[T; N] as FloatSequence<T>>::hide(*self)
+        <[T; N] as FloatSequence>::hide(*self)
     }
 }
 //
-impl<T: FloatLike> FloatSet<T> for &mut [T] {
+impl<T: FloatLike> FloatSet for &mut [T] {
+    type Element = T;
+
+    fn reused_len(&self, num_accumulators: usize) -> usize {
+        <[T]>::len(self)
+            * if <Self as FloatSet>::IS_REUSED {
+                num_accumulators
+            } else {
+                1
+            }
+    }
+
     type Sequence<'a>
         = &'a [T]
     where
@@ -113,7 +121,10 @@ impl<T: FloatLike> FloatSet<T> for &mut [T] {
 }
 
 /// Randomly ordered sequence of inputs that is ready for benchmark consumption
-pub trait FloatSequence<T: FloatLike>: AsRef<[T]> + Copy {
+pub trait FloatSequence: AsRef<[Self::Element]> + Copy {
+    /// Floating-point elements that compose this sequence
+    type Element: FloatLike;
+
     /// Pass each inner value through `pessimize::hide()`. This ensures that...
     ///
     /// - The returned values are unrelated to the original values in the eyes
@@ -135,7 +146,9 @@ pub trait FloatSequence<T: FloatLike>: AsRef<[T]> + Copy {
     const IS_REUSED: bool;
 }
 //
-impl<T: FloatLike, const N: usize> FloatSequence<T> for [T; N] {
+impl<T: FloatLike, const N: usize> FloatSequence for [T; N] {
+    type Element = T;
+
     #[inline]
     fn hide(mut self) -> Self {
         for elem in self.iter_mut() {
@@ -149,7 +162,9 @@ impl<T: FloatLike, const N: usize> FloatSequence<T> for [T; N] {
     const IS_REUSED: bool = true;
 }
 //
-impl<T: FloatLike> FloatSequence<T> for &[T] {
+impl<T: FloatLike> FloatSequence for &[T] {
+    type Element = T;
+
     #[inline]
     fn hide(self) -> Self {
         pessimize::hide::<&[T]>(self)

@@ -1,0 +1,8 @@
+[package]
+name = "average"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+common.workspace = true
+rand.workspace = true
