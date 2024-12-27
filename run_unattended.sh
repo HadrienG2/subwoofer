@@ -46,19 +46,23 @@ function bench_each_type() {
         fi
     }
     if [[ $(lscpu | grep x86) ]]; then
+        FMA_FLAGS=""
+        if [[ $(lscpu | grep fma) ]]; then
+            FMA_FLAGS='-C target-feature=+fma'
+        fi
         if [[ $(lscpu | grep avx512vl) ]]; then
-            RUSTFLAGS='-C target-feature=+avx512f,+avx512vl' $* --bench=f32x16 --bench=f64x08
+            RUSTFLAGS="${FMA_FLAGS} -C target-feature=+avx512f,+avx512vl" $* --bench=f32x16 --bench=f64x08
             rename_perf opt.avx512
         fi
         if [[ $(lscpu | grep avx) ]]; then
-            RUSTFLAGS='-C target-feature=+avx' $* --bench=f32x08 --bench=f64x04
+            RUSTFLAGS="${FMA_FLAGS} -C target-feature=+avx" $* --bench=f32x08 --bench=f64x04
             rename_perf opt.avx
         fi
         if [[ $(lscpu | grep sse2) ]]; then
-            RUSTFLAGS='-C target-feature=+sse2' $* --bench=f32x04 --bench=f64x02
+            RUSTFLAGS="${FMA_FLAGS} -C target-feature=+sse2" $* --bench=f32x04 --bench=f64x02
             rename_perf opt.sse2
         fi
-        RUSTFLAGS='' $* --bench=f32 --bench=f64
+        RUSTFLAGS="${FMA_FLAGS}" $* --bench=f32 --bench=f64
         rename_perf opt.scalar
     else
         if [[ -v WARNED_ABOUT_TARGET_FEATURES ]]; then
