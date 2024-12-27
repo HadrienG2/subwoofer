@@ -46,8 +46,8 @@ function bench_each_type() {
         fi
     }
     if [[ $(lscpu | grep x86) ]]; then
-        if [[ $(lscpu | grep avx512f) ]]; then
-            RUSTFLAGS='-C target-feature=+avx512f' $* --bench=f32x16 --bench=f64x08
+        if [[ $(lscpu | grep avx512vl) ]]; then
+            RUSTFLAGS='-C target-feature=+avx512f,+avx512vl' $* --bench=f32x16 --bench=f64x08
             rename_perf opt.avx512
         fi
         if [[ $(lscpu | grep avx) ]]; then
