@@ -241,12 +241,15 @@ harness = false
 
 [[bench]]
 name = "f64x02"
+harness = false
 required-features = ["simd"]
 
 [[bench]]
 name = "f64x04"
+harness = false
 required-features = ["simd"]
 
 [[bench]]
 name = "f64x08"
+harness = false
 required-features = ["simd"]
