@@ -1,7 +1,14 @@
 [package]
-name = "addsub"
-version.workspace = true
+authors.workspace = true
+autobenches = false
+categories.workspace = true
+description = "Benchmark of ADD/SUB"
 edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "addsub"
+repository.workspace = true
+version.workspace = true
 
 [dependencies]
 common.workspace = true

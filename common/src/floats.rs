@@ -2,10 +2,11 @@
 
 use pessimize::Pessimize;
 use rand::{distributions::Uniform, prelude::*};
+#[cfg(feature = "simd")]
+use std::simd::{LaneCount, Simd, StdFloat, SupportedLaneCount};
 use std::{
     num::NonZeroUsize,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
-    simd::{LaneCount, Simd, StdFloat, SupportedLaneCount},
 };
 
 /// Floating-point type that can be natively processed by the CPU
@@ -181,6 +182,7 @@ impl FloatLike for f64 {
     }
 }
 //
+#[cfg(feature = "simd")]
 impl<const WIDTH: usize> FloatLike for Simd<f32, WIDTH>
 where
     LaneCount<WIDTH>: SupportedLaneCount,
@@ -249,6 +251,7 @@ where
     }
 }
 //
+#[cfg(feature = "simd")]
 impl<const WIDTH: usize> FloatLike for Simd<f64, WIDTH>
 where
     LaneCount<WIDTH>: SupportedLaneCount,

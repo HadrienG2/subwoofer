@@ -1,4 +1,5 @@
-use common::floats::FloatLike;
-use criterion::Criterion;
+mod inputs;
+mod operations;
+mod types;
 
-pub fn benchmark_type<T: FloatLike>(criterion: &mut Criterion) {}
+pub use types::TypeBenchmark;

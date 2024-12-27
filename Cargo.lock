@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "addsub"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "common",
  "rand",
@@ -45,7 +45,7 @@ checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 
 [[package]]
 name = "average"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "common",
  "rand",
@@ -135,7 +135,7 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
 name = "common"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "pessimize",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "fma_addend_average"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "common",
  "rand",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "fma_full_average"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "common",
  "rand",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "fma_multiplier_average"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "common",
  "rand",
@@ -403,7 +403,7 @@ checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
 name = "mul_average"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "common",
  "rand",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "sqrt_positive_addsub"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "common",
  "rand",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "subwoofer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "addsub",
  "average",

@@ -1,7 +1,17 @@
 [package]
-name = "common"
-version.workspace = true
+autobenches = false
+authors.workspace = true
+categories.workspace = true
+description = "Common infrastructure shared by all subnormal benchmarks"
 edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "common"
+repository.workspace = true
+version.workspace = true
+
+[features]
+simd = []
 
 [dependencies]
 criterion.workspace = true

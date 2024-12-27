@@ -1,7 +1,14 @@
 [package]
-name = "fma_full_average"
-version.workspace = true
+authors.workspace = true
+autobenches = false
+categories.workspace = true
+description = "Benchmark of FMA with possibly subnormal inputs&output, followed by averaging"
 edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "fma_full_average"
+repository.workspace = true
+version.workspace = true
 
 [dependencies]
 common.workspace = true

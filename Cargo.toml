@@ -21,8 +21,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+authors = ["Hadrien G. <knights_of_ni@gmx.com>"]
+categories = ["command-line-utilities", "hardware-support", "science"]
 edition = "2021"
+keywords = ["benchmark", "cpu", "denormals", "floating-point", "subnormals"]
+license = "MPL-2.0"
+repository = "https://github.com/HadrienG2/subwoofer.git"
+version = "1.0.0"
 
 [workspace.dependencies]
 common = { path = "./common" }
@@ -32,22 +37,33 @@ rand = "0.8.5"
 target-features = "0.1"
 hwlocality = "1.0.0-alpha"
 
-[profile.release]
-# Good for perf profiling
-debug = "line-tables-only"
+[profile.bench]
 # Sadly needed for pessimize::hide() to be compiled efficiently. Without it, no
 # amount of inlining and LTO can save rustc nightly 2024-12-06 from spilling
 # accumulators to memory in benchmarks with memory data sources. It is not clear
 # to me why that is the case, most likely multiple codegen units get in the way
-# of an important whole-program optimization.
+# of some important whole-program optimization.
 codegen-units = 1
+# Good for perf profiling
+debug = "line-tables-only"
+
+[profile.release]
+# May slightly improve build and runtime perf
+panic = "abort"
 
 # ...and everything below this point is about the "subwoofer" root crate
 
 [package]
-name = "subwoofer"
-version.workspace = true
+authors.workspace = true
+autobenches = false
+categories.workspace = true
+description = "Assessing the impact of subnormals on your CPU's performance"
 edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "subwoofer"
+repository.workspace = true
+version.workspace = true
 
 [features]
 # If you are running this benchmark on hardware which you only have temporary
@@ -58,10 +74,18 @@ edition.workspace = true
 # More fine-grained options are described below.
 default = ["check"]
 
-# Run just enough benchmarks to tell which hardware operations are affected by
-# subnormals, but not to precisely quantify how much they are affected and which
-# input configurations affects them. Use the "measure" feature if you are
-# interested in measuring that.
+### High-level profiles ###
+
+# Run enough benchmarks to tell if subnormals are a problem on your hardware
+#
+# This configuration exercises all supported hardware operations for scalar
+# floating-point data in the L1 cache, at a coarse subnormal freq granularity.
+#
+# This configuration runs relatively quickly (<1h) and should be enough to
+# qualitatively tell whether subnormals affect floating-point performance on
+# your hardware, and if so which operations are affected. It is not enough to
+# precisely tell how much the hardware operations are affected, whether the
+# impact is type-dependent, how it depends on subnormal freq, etc.
 check = [
     "bench_addsub",               # ADD/SUB
     "bench_sqrt_positive_addsub", # Includes SQRT
@@ -69,16 +93,27 @@ check = [
     "bench_fma_full_average",     # Includes FMA
 ]
 
-# Enable this feature when you want to precisely know when hardware operations
-# are affected by subnormals, and how bad the impact can get.
+# Run enough benchmarks to check how good/bad the generated code is
 #
-# The price to pay is a large increase in compilation and execution time.
+# This configuration makes sure that all qualitatively different code paths are
+# generated and exercised by cargo bench, so that they appear in the output of
+# profilers like perf or can be analyzed by static analysis tools like Cutter or
+# MAQAO. It does not increase the amount of execution configurations, so it is
+# not suitable for quantitative analysis.
+codegen = ["bench_all", "register_data_sources", "simd"]
+
+# Run enough benchmarks to quantitatively assess the perf impact of subnormals
+#
+# This configuration contains everything needed to quantitatively assess the
+# worst-case impact of subnormals on typical hardware.
 measure = [
     "bench_all",
     "register_data_sources",
     "simd",
     "subnormal_freq_resolution_1in64",
 ]
+
+### Fine-grained options ###
 
 # Full set of supported microbenchmarks
 bench_all = [
@@ -91,8 +126,8 @@ bench_all = [
     "bench_fma_full_average",        # average + FMA with x%subnormal multiplier and addend, x²%subnormal result
 ]
 
-# Control which benchmarks are built in a fine-grained ways. Lets you speed up
-# compilation when debugging one benchmark. Use with --no-default-features.
+# Fine-grained control over benchmark selection. Lets you speed up compilation
+# when debugging a specific benchmark. Use with --no-default-features.
 bench_addsub = ["dep:addsub"]
 bench_average = ["dep:average"]
 bench_fma_addend_average = ["dep:fma_addend_average"]
@@ -114,16 +149,17 @@ more_data_sources = ["register_data_sources", "more_memory_data_sources"]
 register_data_sources = []
 more_memory_data_sources = []
 
-# By default, we only run benchmarks with no instruction-level parallelism
-# (always latency-bound), with ~maximal ILP (hopefully throughput-bound), and
-# with half the maximal ILP (as a sanity check, see below).
+# By default, we only run benchmarks with minimal instruction-level parallelism
+# (a configuration which is latency-bound for all operations other than SQRT),
+# with ~maximal ILP (hopefully throughput-bound), and with half the maximal ILP
+# (as a sanity check, see below).
 #
 # This feature lets you cover all power-of-two degrees of ILP instead. Use it
 # when you observe that the intermediate ILP configuration runs faster than the
 # maximal ILP configuration, which suggests that the maximal ILP configuration
-# is running into a microarchitectural bottleneck e.g. it trashes the CPU's
-# instruction cache because there is too much code. In this situation, it is
-# better to try all ILP configurations to make sure that you do cover the ILP
+# is running into codegen or microarchitectural bottleneck e.g. it trashes the
+# CPU's instruction cache because there is too much code. In this situation, it
+# is better to try all ILP configurations to make sure that you do cover the ILP
 # configuration of highest runtime performance.
 #
 # The price to pay is a moderate increase in execution time.
@@ -135,7 +171,7 @@ more_ilp_configurations = []
 # This lets you check if the subnormal fallback logic is vectorized or scalar.
 #
 # The price to pay is a large increase in compilation and execution time.
-simd = []
+simd = ["common/simd"]
 
 # By default, we check with [0, 25, 50, 75, 100]% of subnormal inputs.
 #
@@ -181,5 +217,36 @@ sqrt_positive_addsub = { path = "./sqrt_positive_addsub", optional = true }
 bench = false
 
 [[bench]]
-name = "benchmark"
+name = "f32"
 harness = false
+
+[[bench]]
+name = "f32x04"
+harness = false
+required-features = ["simd"]
+
+[[bench]]
+name = "f32x08"
+harness = false
+required-features = ["simd"]
+
+[[bench]]
+name = "f32x16"
+harness = false
+required-features = ["simd"]
+
+[[bench]]
+name = "f64"
+harness = false
+
+[[bench]]
+name = "f64x02"
+required-features = ["simd"]
+
+[[bench]]
+name = "f64x04"
+required-features = ["simd"]
+
+[[bench]]
+name = "f64x08"
+required-features = ["simd"]
