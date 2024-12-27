@@ -12,6 +12,8 @@
 # perf and classic utilities like bash, grep and lscpu. Patches to extend
 # hardware or OS support are welcome!
 
+### START FROM A CLEAN SLATE ###
+
 # Remove a few bash gotchas that I don't need
 set -euo pipefail
 
@@ -19,17 +21,24 @@ set -euo pipefail
 cargo clean
 rm -f perf.data*
 
+### QUICK CHECK FOR SUBNORMAL ISSUES ###
+
 # First, qualitatively check if subnormals seem to be a problem at all
 cargo bench --features=check
 echo '=== If no operation is slowed down by subnormals, you can stop here ==='
+
+### OPTIMIZED CODEGEN, CODEGEN CHECK ###
 
 # Benchmark all supported data types in an optimized codegen configuration
 #
 # On hardware like x86 that supports multiple SIMD vector widths, it is
 # beneficial to only enable the minimum hardware target-features required for
-# each vector width because it reduces the strength of the optimization barriers
-# that we need to apply to prevent autovectorization, and thus the negative
-# impact of such barriers on the quality of generated code.
+# each vector width, because it reduces the strength of the optimization
+# barriers that we need to apply to prevent autovectorization, and thus the
+# negative impact of such barriers on the quality of generated code.
+#
+# Parametrized by a command that behaves like `cargo bench` and accepts cargo
+# build/bench arguments, but may also produce perf.data files.
 function bench_each_type() {
     function rename_perf() {
         if [[ -e perf.data ]]; then
@@ -37,57 +46,73 @@ function bench_each_type() {
         fi
     }
     if [[ $(lscpu | grep x86) ]]; then
-        if [[ $(lscpu | grep avx512f ]]; then
-            RUSTFLAGS='-C target-features=+avx512f' $* --benches=f32x16,f64x08
+        if [[ $(lscpu | grep avx512f) ]]; then
+            RUSTFLAGS='-C target-features=+avx512f' $* --bench=f32x16 --bench=f64x08
             rename_perf opt.avx512
         fi
         if [[ $(lscpu | grep avx) ]]; then
-            RUSTFLAGS='-C target-features=+avx' $* --benches=f32x08,f64x04
+            RUSTFLAGS='-C target-features=+avx' $* --bench=f32x08 --bench=f64x04
             rename_perf opt.avx
         fi
         if [[ $(lscpu | grep sse2) ]]; then
-            RUSTFLAGS='-C target-features=+sse2' $* --benches=f32x04,f64x02
+            RUSTFLAGS='-C target-features=+sse2' $* --bench=f32x04 --bench=f64x02
             rename_perf opt.sse2
         fi
-        RUSTFLAGS='' $* --benches=f32,f64
+        RUSTFLAGS='' $* --bench=f32 --bench=f64
         rename_perf opt.scalar
     else
         if [[ -v WARNED_ABOUT_TARGET_FEATURES ]]; then
             echo '--- WARNING: Unknown hardware architecture, target-features may be suboptimal ---'
-            export WARNED_ABOUT_TARGET_FEATURES=1
+            WARNED_ABOUT_TARGET_FEATURES=1
         fi
-        $*
+        $* --benches
         rename_perf native
     fi
 }
 
-# Measure perf data for codegen quality assessment
-function check_codegen() {
-    cargo build --benches --features=codegen
-    PERF_FLAGS=''
-    if [[ $(lscpu | grep AMD) ]]
-        # perf record without -a is not reliably available on AMD chips
-        PERF_FLAGS="${PERF_FLAGS} -a"
-    fi
-    perf record ${PERF_FLAGS} -- cargo bench --features=codegen -- --profile-time=1
-}
-bench_each_type check_codegen
-msg_native_codegen_ready='=== You can now run perf report --no-source -i perf.data.opt.xyz to check optimized codegen ==='
-if [[ -e perf.data.native ]]; then
-    echo "${msg_native_codegen_ready}"
+# Decide which flags must be applied to perf record on this CPU
+PERF_FLAGS=''
+if [[ $(lscpu | grep AMD) ]]; then
+    # perf record without -a is not reliably available on AMD chips...
+    PERF_FLAGS="${PERF_FLAGS} -a"
 fi
 
-# Quantitatively measure the overhead of subnormals
+# Measure perf data for codegen quality assessment
+#
+# Must be parametrized with cargo's bench selection build arguments, either
+# `--benches` to build all benchmarks or a sequence of `--bench=x --bench=y ...`
+# to only build a specific set of benchmarks.
+function check_codegen() {
+    cargo build --features=codegen $*
+    perf record ${PERF_FLAGS} -- cargo bench --features=codegen $* -- --profile-time=1
+}
+bench_each_type check_codegen
+
+# Tell the user that codegen quality measurements are now available
+MSG_NATIVE_CODEGEN_READY='=== You can now run "perf report --no-source -i perf.data.native" to check default (-C target-cpu=native) codegen ==='
+if [[ -e perf.data.native ]]; then
+    echo "${MSG_NATIVE_CODEGEN_READY}"
+else
+    echo '=== You can now run "perf report --no-source -i perf.data.opt.xyz" to check optimized codegen ==='
+fi
+
+### QUANTITATIVE SUBNORMALS IMPACT ASSESSMENT ###
+
+# Measure the overhead of subnormals with enough precision for all known CPUs
 bench_each_type cargo bench --features=measure
 echo '=== You can now check the Criterion report in target/criterion/report ==='
 
+### NATIVE CODEGEN CHECK ###
+
 # Assess codegen quality in -C target-cpu=native mode, if not done already
 if [[ ! -e perf.data.native ]]; then
-    check_codegen
+    check_codegen --benches
     mv perf.data perf.data.native
-    echo "${msg_native_codegen_ready}"
+    echo "${MSG_NATIVE_CODEGEN_READY}"
 fi
 
-# Given enough time, make sure all allowed benchmark configurations do run
+### RUN REMAINING OPTIONAL BENCHMARKS IF GIVEN ENOUGH TIME ###
+
+# Make sure all allowed benchmark configurations could eventually run
 bench_each_type cargo bench --all-features
 echo '=== All done, please check out target/criterion and perf report --no-source perf.data.xyz ==='
