@@ -47,15 +47,15 @@ function bench_each_type() {
     }
     if [[ $(lscpu | grep x86) ]]; then
         if [[ $(lscpu | grep avx512f) ]]; then
-            RUSTFLAGS='-C target-features=+avx512f' $* --bench=f32x16 --bench=f64x08
+            RUSTFLAGS='-C target-feature=+avx512f' $* --bench=f32x16 --bench=f64x08
             rename_perf opt.avx512
         fi
         if [[ $(lscpu | grep avx) ]]; then
-            RUSTFLAGS='-C target-features=+avx' $* --bench=f32x08 --bench=f64x04
+            RUSTFLAGS='-C target-feature=+avx' $* --bench=f32x08 --bench=f64x04
             rename_perf opt.avx
         fi
         if [[ $(lscpu | grep sse2) ]]; then
-            RUSTFLAGS='-C target-features=+sse2' $* --bench=f32x04 --bench=f64x02
+            RUSTFLAGS='-C target-feature=+sse2' $* --bench=f32x04 --bench=f64x02
             rename_perf opt.sse2
         fi
         RUSTFLAGS='' $* --bench=f32 --bench=f64
