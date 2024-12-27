@@ -1,8 +1,8 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
+    floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
-    process::{self, Benchmark, Operation},
-    types::FloatLike,
+    operation::{self, Benchmark, Operation},
 };
 use rand::Rng;
 
@@ -40,12 +40,12 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
     type Float = T;
 
     fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize {
-        inputs.reused_len(ILP)
+        inputs.reused_len(ILP) / 2
     }
 
     fn begin_run(&mut self, mut rng: impl Rng) {
         let normal_sampler = T::normal_sampler();
-        self.accumulators = process::multiplicative_accumulators(&mut rng);
+        self.accumulators = operation::multiplicative_accumulators(&mut rng);
         self.target = normal_sampler(&mut rng);
     }
 
@@ -65,7 +65,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
                 for acc in self.accumulators.iter_mut() {
                     *acc = iter(*acc, factor, addend);
                 }
-                self.accumulators = process::hide_accumulators(self.accumulators);
+                self.accumulators = operation::hide_accumulators(self.accumulators);
             }
         } else {
             let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -80,7 +80,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
                 {
                     *acc = iter(*acc, factor, addend);
                 }
-                self.accumulators = process::hide_accumulators(self.accumulators);
+                self.accumulators = operation::hide_accumulators(self.accumulators);
             }
             for ((&factor, &addend), acc) in factor_remainder
                 .iter()
@@ -94,6 +94,6 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
     }
 
     fn consume_outputs(self) {
-        process::consume_accumulators(self.accumulators);
+        operation::consume_accumulators(self.accumulators);
     }
 }

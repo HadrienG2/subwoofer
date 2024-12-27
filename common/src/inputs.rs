@@ -1,6 +1,6 @@
 //! Benchmark input datasets
 
-use crate::types::FloatLike;
+use crate::floats::FloatLike;
 use rand::prelude::*;
 
 /// Unordered collection of benchmark inputs, to be ordered before use

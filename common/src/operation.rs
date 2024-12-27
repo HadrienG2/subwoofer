@@ -1,8 +1,8 @@
 //! Benchmark inner loops and associated types
 
 use crate::{
+    floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
-    types::FloatLike,
 };
 use criterion::{measurement::WallTime, BenchmarkGroup, Throughput};
 use rand::prelude::*;
@@ -78,6 +78,10 @@ pub trait Benchmark: Copy {
 
     /// Number of hardware operations under study that this benchmark will
     /// execute when processing a certain input dataset
+    ///
+    /// Most benchmarks consume one input element per operation, in which case
+    /// this will be [`inputs.reused_len(ilp)`](FloatSet::reused_len) with `ilp`
+    /// set to this benchmark's accumulation ILP.
     fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize;
 
     /// Start a new benchmark run
@@ -88,6 +92,9 @@ pub trait Benchmark: Copy {
     /// to avoid measurement bias linked to multiple runs with a the same
     /// initial state. But if generating the state from an RNG is too expensive,
     /// a reused state can be passed through [`pessimize::hide()`] instead.
+    ///
+    /// You will typically want to initialize your accumulators to one of
+    /// [`additive_accumulators()`] or [`multiplicative_accumulators()`] here.
     fn begin_run(&mut self, rng: impl Rng);
 
     /// Integrate a new batch of inputs into the internal state
@@ -99,10 +106,16 @@ pub trait Benchmark: Copy {
     /// will have to pass inputs through a `pessimize::hide()` barrier, which
     /// may come at the expense of less optimal codegen.
     ///
-    /// You will also want to regularly pass accumulators through
-    /// [`hide_accumulators()`], otherwise the compiler will perform unwanted
-    /// autovectorization and you will be unable to compare scalar vs SIMD
-    /// overhead. See the `integrate_xyz` skeletons below for examples.
+    /// You will also want to regularly pass accumulators through the provided
+    /// [`hide_accumulators()`] function, otherwise the compiler will perform
+    /// unwanted autovectorization and you will be unable to compare scalar vs
+    /// SIMD overhead.
+    ///
+    /// If your benchmark sequentially accumulates inputs one by one, you may
+    /// use the provided [`integrate_full()`] skeleton to implement this
+    /// function. If your benchmark alternates between two different ways to
+    /// integrate inputs, you may use the provided [`integrate_halves()`]
+    /// skeleton to implement this function.
     ///
     /// Implementations should be marked `#[inline]` as this function will be
     /// repeatedly called as part of the timed benchmark run.
@@ -112,8 +125,8 @@ pub trait Benchmark: Copy {
 
     /// End a benchmark run by making the compiler think the output is used
     ///
-    /// Pass benchmark accumulators through [`consume_accumulators()`] so that
-    /// the compiler believes that the output of this benchmark run is used.
+    /// It is normally enough to pass the benchmark's internal accumulators
+    /// through the provided [`consume_accumulators()`] function.
     fn consume_outputs(self);
 }
 

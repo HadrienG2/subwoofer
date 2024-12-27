@@ -1,3 +1,13 @@
+# For optimal build performance, the implementation is split in multiple crates
+#
+# - A "common" crate featuring the logic shared by all floating-point operations
+# - A crate per floating-point operation that we may want to benchmark
+# - A "subwoofer" root crate that receives configuration (via cargo features)
+#   and orchestrates benchmark runs accordingly
+#   * ...which defines one benchmark per supported floating-point type
+#
+# These crates are grouped in a workspace where common properties are defined...
+
 [workspace]
 members = [
     "addsub",
@@ -13,6 +23,26 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+
+[workspace.dependencies]
+common = { path = "./common" }
+criterion = "0.5"
+pessimize = { version = "2.0", features = ["nightly"] }
+rand = "0.8.5"
+target-features = "0.1"
+hwlocality = "1.0.0-alpha"
+
+[profile.release]
+# Good for perf profiling
+debug = "line-tables-only"
+# Sadly needed for pessimize::hide() to be compiled efficiently. Without it, no
+# amount of inlining and LTO can save rustc nightly 2024-12-06 from spilling
+# accumulators to memory in benchmarks with memory data sources. It is not clear
+# to me why that is the case, most likely multiple codegen units get in the way
+# of an important whole-program optimization.
+codegen-units = 1
+
+# ...and everything below this point is about the "subwoofer" root crate
 
 [package]
 name = "subwoofer"
@@ -134,28 +164,18 @@ subnormal_freq_resolution_1in128 = []
 # TODO: Add configurations and adjust "measure" configuration if we find
 #       hardware where <1% resolution is still not enough
 
-[workspace.dependencies]
-common = { path = "./common" }
-criterion = "0.5"
-pessimize = { version = "2.0", features = ["nightly"] }
-rand = "0.8.5"
-target-features = "0.1"
-hwlocality = "1.0.0-alpha"
-
 [dependencies]
 addsub = { path = "./addsub", optional = true }
 average = { path = "./average", optional = true }
+common.workspace = true
+criterion.workspace = true
 fma_addend_average = { path = "./fma_addend_average", optional = true }
 fma_full_average = { path = "./fma_full_average", optional = true }
 fma_multiplier_average = { path = "./fma_multiplier_average", optional = true }
-mul_average = { path = "./mul_average", optional = true }
-sqrt_positive_addsub = { path = "./sqrt_positive_addsub", optional = true }
-
-[dev-dependencies]
-common.workspace = true
-criterion.workspace = true
 hwlocality.workspace = true
+mul_average = { path = "./mul_average", optional = true }
 rand.workspace = true
+sqrt_positive_addsub = { path = "./sqrt_positive_addsub", optional = true }
 
 [lib]
 bench = false
@@ -163,13 +183,3 @@ bench = false
 [[bench]]
 name = "benchmark"
 harness = false
-
-[profile.release]
-# Good for perf profiling
-debug = "line-tables-only"
-# Sadly needed for pessimize::hide() to be compiled efficiently. Without it, no
-# amount of inlining and LTO can save rustc nightly 2024-12-06 from spilling
-# accumulators to memory in benchmarks with memory data sources. It is not clear
-# to me why that is the case, most likely multiple codegen units get in the way
-# of an important whole-program optimization.
-codegen-units = 1

@@ -2,9 +2,9 @@
 
 use common::{
     arch::MIN_FLOAT_REGISTERS,
+    floats::FloatLike,
     inputs::FloatSet,
-    process::{Benchmark, Operation},
-    types::FloatLike,
+    operation::{Benchmark, Operation},
 };
 use criterion::{
     criterion_group, criterion_main, measurement::WallTime, BenchmarkGroup, Criterion,
@@ -62,9 +62,8 @@ pub fn criterion_benchmark(criterion: &mut Criterion) {
         .collect::<Vec<_>>();
 
     // Define configuration that is shared by all benchmarks
-    let mut rng = rand::thread_rng();
     let config = &mut CommonConfiguration {
-        rng: &mut rng,
+        rng: rand::thread_rng(),
         criterion,
         memory_input_sizes: &memory_input_sizes,
     };
@@ -114,9 +113,9 @@ pub fn criterion_benchmark(criterion: &mut Criterion) {
 }
 
 /// Configuration shared by all benchmarks
-struct CommonConfiguration<'rng, 'criterion, 'memory_input_sizes> {
+struct CommonConfiguration<'criterion, 'memory_input_sizes> {
     /// Random number generator
-    rng: &'rng mut ThreadRng,
+    rng: ThreadRng,
 
     /// Criterion benchmark harness
     criterion: &'criterion mut Criterion,
@@ -143,7 +142,7 @@ fn benchmark_type<T: FloatLike>(common_config: &mut CommonConfiguration, tname: 
 
     // Define the common configuration for this type
     let type_config = &mut TypeConfiguration {
-        rng: common_config.rng,
+        rng: common_config.rng.clone(),
         criterion: common_config.criterion,
         tname,
         memory_inputs: &mut memory_inputs,
@@ -167,9 +166,9 @@ fn benchmark_type<T: FloatLike>(common_config: &mut CommonConfiguration, tname: 
 }
 
 /// Configuration selected by [`benchmark_type()`]
-struct TypeConfiguration<'rng, 'criterion, 'memory_inputs, 'memory_input_name, T: FloatLike> {
+struct TypeConfiguration<'criterion, 'memory_inputs, 'memory_input_name, T: FloatLike> {
     /// Random number generator
-    rng: &'rng mut ThreadRng,
+    rng: ThreadRng,
 
     /// Criterion benchmark harness
     criterion: &'criterion mut Criterion,
@@ -363,7 +362,7 @@ fn benchmark_operation<T: FloatLike, Op: Operation<T>>(type_config: &mut TypeCon
         for_each_inputregs_and_ilp!(
             benchmark_register_inputs() with {
                 common_config: {
-                    rng: &mut type_config.rng,
+                    rng: type_config.rng.clone(),
                     float: T,
                     operation: Op,
                     criterion: &mut type_config.criterion,
@@ -383,7 +382,7 @@ fn benchmark_operation<T: FloatLike, Op: Operation<T>>(type_config: &mut TypeCon
             // Run the benchmarks at each supported ILP level
             for_each_ilp!(benchmark_memory_inputs(&mut *input_storage) with {
                 common_config: {
-                    rng: &mut type_config.rng,
+                    rng: type_config.rng.clone(),
                     float: T,
                     operation: Op,
                     group: &mut group,
@@ -425,9 +424,9 @@ where
 }
 
 /// Configuration selected by [`benchmark_operation()`]
-struct BenchmarkConfiguration<'rng, 'criterion, 'group, B: Benchmark> {
+struct BenchmarkConfiguration<'criterion, 'group, B: Benchmark> {
     /// Random number generator
-    rng: &'rng mut ThreadRng,
+    rng: ThreadRng,
 
     /// Criterion benchmark group
     group: &'group mut BenchmarkGroup<'criterion, WallTime>,

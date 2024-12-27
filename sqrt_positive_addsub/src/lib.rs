@@ -1,7 +1,7 @@
 use common::{
+    floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
-    process::{self, Benchmark, Operation},
-    types::FloatLike,
+    operation::{self, Benchmark, Operation},
 };
 use rand::Rng;
 
@@ -44,7 +44,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
         // This is just a random additive walk of ~unity or subnormal step, so given a
         // high enough starting point, an initially normal accumulator should stay in
         // the normal range forever.
-        self.accumulators = process::additive_accumulators(rng);
+        self.accumulators = operation::additive_accumulators(rng);
     }
 
     #[inline]
@@ -60,7 +60,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
             // computations and reuse their result for all accumulators (in
             // fact it would even be allowed to reuse them for the entire
             // outer iters loop in run_benchmark).
-            process::integrate_halves::<_, _, ILP, true>(
+            operation::integrate_halves::<_, _, ILP, true>(
                 self.accumulators,
                 inputs,
                 low_iter,
@@ -74,7 +74,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
             // for a whole arbitrarily large dynamically-sized batch of
             // input data.
             assert!(Inputs::NUM_REGISTER_INPUTS.is_none());
-            process::integrate_halves::<_, _, ILP, false>(
+            operation::integrate_halves::<_, _, ILP, false>(
                 self.accumulators,
                 inputs,
                 low_iter,
@@ -86,6 +86,6 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
     }
 
     fn consume_outputs(self) {
-        process::consume_accumulators(self.accumulators);
+        operation::consume_accumulators(self.accumulators);
     }
 }

@@ -1,8 +1,8 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
+    floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
-    process::{self, Benchmark, Operation},
-    types::FloatLike,
+    operation::{self, Benchmark, Operation},
 };
 use rand::Rng;
 
@@ -42,7 +42,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
         // This is just a random additive walk of ~unity or subnormal step, so given a
         // high enough starting point, an initially normal accumulator should stay in
         // the normal range forever.
-        self.accumulators = process::additive_accumulators(rng);
+        self.accumulators = operation::additive_accumulators(rng);
     }
 
     #[inline]
@@ -52,7 +52,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
     {
         // No need for input hiding here, the compiler cannot do anything dangerous
         // with the knowledge that inputs are always the same in this benchmark.
-        let (next_accs, next_inputs) = process::integrate_halves::<_, _, ILP, false>(
+        let (next_accs, next_inputs) = operation::integrate_halves::<_, _, ILP, false>(
             self.accumulators,
             inputs,
             |acc, elem| acc + elem,
@@ -63,6 +63,6 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
     }
 
     fn consume_outputs(self) {
-        process::consume_accumulators(self.accumulators);
+        operation::consume_accumulators(self.accumulators);
     }
 }

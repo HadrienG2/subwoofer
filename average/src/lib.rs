@@ -1,8 +1,8 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
+    floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
-    process::{self, Benchmark, Operation},
-    types::FloatLike,
+    operation::{self, Benchmark, Operation},
 };
 use rand::Rng;
 
@@ -52,7 +52,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AverageBenchmark<T, ILP> {
     }
 
     fn begin_run(&mut self, rng: impl Rng) {
-        self.accumulators = process::multiplicative_accumulators(rng);
+        self.accumulators = operation::multiplicative_accumulators(rng);
     }
 
     #[inline]
@@ -61,7 +61,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AverageBenchmark<T, ILP> {
         Inputs: FloatSequence<Element = Self::Float>,
     {
         let (next_accs, next_inputs) =
-            process::integrate_full(self.accumulators, inputs, |acc, elem| {
+            operation::integrate_full(self.accumulators, inputs, |acc, elem| {
                 (acc + elem) * T::splat(0.5)
             });
         self.accumulators = next_accs;
@@ -69,6 +69,6 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AverageBenchmark<T, ILP> {
     }
 
     fn consume_outputs(self) {
-        process::consume_accumulators(self.accumulators);
+        operation::consume_accumulators(self.accumulators);
     }
 }

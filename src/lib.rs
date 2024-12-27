@@ -1,1 +1,4 @@
-//! Nothing here yet, please check out benches/benchmark.rs
+use common::floats::FloatLike;
+use criterion::Criterion;
+
+pub fn benchmark_type<T: FloatLike>(criterion: &mut Criterion) {}
