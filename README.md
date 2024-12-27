@@ -194,6 +194,11 @@ If you need to go down that route, do not forget to make a proper backup of the
 `target/criterion` directory as soon as possible, before you lose access to the
 hardware or run `cargo clean` without thinking!
 
+And finally, if you like to benchmark your CPU just like I do, with multiple
+passes of increasing precision to get a better latency vs precision tradeoff
+(simple results quickly, complex results later if the script is left to run long
+enough), check out the `run_unattended.sh` script.
+
 
 ## Naming convention
 
