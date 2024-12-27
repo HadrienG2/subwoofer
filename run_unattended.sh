@@ -83,7 +83,7 @@ fi
 # `--benches` to build all benchmarks or a sequence of `--bench=x --bench=y ...`
 # to only build a specific set of benchmarks.
 function check_codegen() {
-    cargo build --features=codegen $*
+    cargo build --profile=bench --features=codegen $*
     perf record ${PERF_FLAGS} -- cargo bench --features=codegen $* -- --profile-time=1
 }
 bench_each_type check_codegen
