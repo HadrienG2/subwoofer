@@ -9,8 +9,8 @@
 # execution time during unattended execution.
 #
 # This was only tested on Linux and with x86 CPUs, and assumes availability of
-# perf and classic utilities like bash, grep and lscpu. Patches to extend
-# hardware or OS support are welcome!
+# cargo criterion, perf and classic utilities like bash, grep and lscpu. Patches
+# to extend hardware or OS support are welcome!
 
 ### START FROM A CLEAN SLATE ###
 
@@ -24,7 +24,7 @@ rm -f perf.data*
 ### QUICK CHECK FOR SUBNORMAL ISSUES ###
 
 # First, qualitatively check if subnormals seem to be a problem at all
-cargo bench --features=check
+cargo criterion --features=check
 echo '=== If no operation is slowed down by subnormals, you can stop here ==='
 
 ### OPTIMIZED CODEGEN, CODEGEN CHECK ###
@@ -46,26 +46,31 @@ function bench_each_type() {
         fi
     }
     if [[ $(lscpu | grep x86) ]]; then
+        FMA_FLAG='-C target-feature='
         if [[ $(lscpu | grep fma) ]]; then
-            FMA_FLAGS="-C target-feature=+fma"
+            FMA_FLAG="${FMA_FLAG}+fma"
         else
-            FMA_FLAGS="-C target-feature=-fma"
+            FMA_FLAG="${FMA_FLAG}-fma"
         fi
         if [[ $(lscpu | grep avx512vl) ]]; then
-            RUSTFLAGS="${FMA_FLAGS},+avx512f,+avx512vl" $* --bench=f32x16 --bench=f64x08
+            # avx512vl is not really needed, but we did not implement support
+            # for type-dependent register counts yet as it is not needed on any
+            # real-world CPU, so we need avx512vl for the benchmark to allow
+            # itself to use all available 32 registers.
+            RUSTFLAGS="${FMA_FLAG},+avx512f,+avx512vl" $* --bench=f32x16 --bench=f64x08
             rename_perf opt.avx512
         fi
         if [[ $(lscpu | grep avx) ]]; then
-            RUSTFLAGS="${FMA_FLAGS},+avx" $* --bench=f32x08 --bench=f64x04
+            RUSTFLAGS="${FMA_FLAG},+avx" $* --bench=f32x08 --bench=f64x04
             rename_perf opt.avx
         fi
         # Should not activate FMA for <= SSE, as it also activates AVX and thus
         # degrades codegen.
         if [[ $(lscpu | grep sse2) ]]; then
-            RUSTFLAGS="-C target-feature=-fma,+sse2" $* --bench=f32x04 --bench=f64x02
+            RUSTFLAGS='-C target-feature=+sse2' $* --bench=f32x04 --bench=f64x02
             rename_perf opt.sse2
         fi
-        RUSTFLAGS="-C target-feature=-fma" $* --bench=f32 --bench=f64
+        RUSTFLAGS='' $* --bench=f32 --bench=f64
         rename_perf opt.scalar
     else
         if [[ -v WARNED_ABOUT_TARGET_FEATURES ]]; then
@@ -91,7 +96,7 @@ fi
 # to only build a specific set of benchmarks.
 function check_codegen() {
     cargo build --profile=bench --features=codegen $*
-    perf record ${PERF_FLAGS} -- cargo bench --features=codegen $* -- --profile-time=1
+    perf record ${PERF_FLAGS} -- cargo criterion --features=codegen $* -- --profile-time=1
 }
 bench_each_type check_codegen
 
@@ -106,7 +111,7 @@ fi
 ### QUANTITATIVE SUBNORMALS IMPACT ASSESSMENT ###
 
 # Measure the overhead of subnormals with enough precision for all known CPUs
-bench_each_type cargo bench --features=measure
+bench_each_type cargo criterion --features=measure
 echo '=== You can now check the Criterion report in target/criterion/report ==='
 
 ### NATIVE CODEGEN CHECK ###
@@ -121,5 +126,5 @@ fi
 ### RUN REMAINING OPTIONAL BENCHMARKS IF GIVEN ENOUGH TIME ###
 
 # Make sure all allowed benchmark configurations could eventually run
-bench_each_type cargo bench --all-features
+bench_each_type cargo criterion --all-features
 echo '=== All done, please check out target/criterion and perf report --no-source perf.data.xyz ==='

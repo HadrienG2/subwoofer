@@ -31,7 +31,7 @@ version = "1.0.0"
 
 [workspace.dependencies]
 common = { path = "./common" }
-criterion = "0.5"
+criterion = { verion = "0.5", default-feature = false, features = ["rayon"] }
 pessimize = { version = "2.0", features = ["nightly"] }
 rand = "0.8.5"
 target-features = "0.1"
@@ -72,7 +72,7 @@ version.workspace = true
 # time (we're talking about multiple days of execution).
 #
 # More fine-grained options are described below.
-default = ["check"]
+default = ["cargo_bench_support", "check"]
 
 ### High-level profiles ###
 
@@ -114,6 +114,13 @@ measure = [
 ]
 
 ### Fine-grained options ###
+
+# Enable support for cargo bench
+#
+# Without this, "cargo bench" runs do not generate criterion reports, and one
+# needs to use "cargo criterion" instead. This speeds up the criterion build
+# because now benchmarks do not need to bundle a full report generator.
+cargo_bench_support = ["criterion/cargo_bench_support", "criterion/plotters"]
 
 # Full set of supported microbenchmarks
 bench_all = [
