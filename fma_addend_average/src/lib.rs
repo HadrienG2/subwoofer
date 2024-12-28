@@ -49,17 +49,15 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaAddendAverageBenchmark<T, 
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(mut self, inputs: Inputs) -> (Self, Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
         let halve_weight = T::splat(0.5);
-        let (next_accs, next_inputs) =
-            operations::integrate_full(self.accumulators, inputs, move |acc, elem| {
-                (acc.mul_add(halve_weight, elem) + self.target) * halve_weight
-            });
-        self.accumulators = next_accs;
-        (self, next_inputs)
+        let target = self.target;
+        operations::integrate_full(&mut self.accumulators, inputs, move |acc, elem| {
+            (acc.mul_add(halve_weight, elem) + target) * halve_weight
+        });
     }
 
     #[inline]

@@ -47,20 +47,18 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(mut self, inputs: Inputs) -> (Self, Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
         // No need for input hiding here, the compiler cannot do anything
         // dangerous with the knowledge that inputs are always the same.
-        let (next_accs, next_inputs) = operations::integrate_halves::<_, _, ILP, false>(
-            self.accumulators,
+        operations::integrate_halves::<_, _, ILP, false>(
+            &mut self.accumulators,
             inputs,
             |acc, elem| acc + elem,
             |acc, elem| acc - elem,
         );
-        self.accumulators = next_accs;
-        (self, next_inputs)
     }
 
     #[inline]

@@ -83,7 +83,7 @@ pub trait Benchmark: Copy {
     ///
     /// Implementations must be marked `#[inline]` as this function will be
     /// called as part of the timed benchmark run.
-    fn integrate_inputs<Inputs>(self, inputs: Inputs) -> (Self, Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>;
 
@@ -123,9 +123,7 @@ pub fn run_benchmark<B: Benchmark>(
             // optimizations must be reviewed very carefully.
             let start = Instant::now();
             for _ in 0..iters {
-                let (next_bench, next_inputs) = benchmark.integrate_inputs(inputs);
-                benchmark = next_bench;
-                inputs = next_inputs;
+                benchmark.integrate_inputs(&mut inputs);
             }
             let elapsed = start.elapsed();
 
@@ -165,17 +163,17 @@ pub fn normal_accumulators<T: FloatLike, const ILP: usize>(mut rng: impl Rng) ->
 /// Benchmark skeleton that processes the full input homogeneously
 #[inline]
 pub fn integrate_full<T: FloatLike, Inputs: FloatSequence<Element = T>, const ILP: usize>(
-    mut accumulators: [T; ILP],
-    inputs: Inputs,
+    accumulators: &mut [T; ILP],
+    inputs: &Inputs,
     mut iter: impl Copy + FnMut(T, T) -> T,
-) -> ([T; ILP], Inputs) {
+) {
     let inputs_slice = inputs.as_ref();
     if Inputs::IS_REUSED {
         for &elem in inputs_slice {
             for acc in accumulators.iter_mut() {
                 *acc = iter(*acc, elem);
             }
-            accumulators = hide_accumulators(accumulators);
+            hide_accumulators(accumulators);
         }
     } else {
         let chunks = inputs_slice.chunks_exact(ILP);
@@ -184,13 +182,12 @@ pub fn integrate_full<T: FloatLike, Inputs: FloatSequence<Element = T>, const IL
             for (&elem, acc) in chunk.iter().zip(accumulators.iter_mut()) {
                 *acc = iter(*acc, elem);
             }
-            accumulators = hide_accumulators(accumulators);
+            hide_accumulators(accumulators);
         }
         for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
             *acc = iter(*acc, elem);
         }
     }
-    (accumulators, inputs)
 }
 
 /// Benchmark skeleton that treats each half of the input differently
@@ -201,11 +198,11 @@ pub fn integrate_halves<
     const ILP: usize,
     const HIDE_INPUTS: bool,
 >(
-    mut accumulators: [T; ILP],
-    mut inputs: Inputs,
+    accumulators: &mut [T; ILP],
+    inputs: &mut Inputs,
     mut low_iter: impl Copy + FnMut(T, T) -> T,
     mut high_iter: impl Copy + FnMut(T, T) -> T,
-) -> ([T; ILP], Inputs) {
+) {
     if Inputs::IS_REUSED {
         if HIDE_INPUTS {
             // When we need to hide inputs, we flip the order of iteration over
@@ -226,9 +223,9 @@ pub fn integrate_halves<
                     *acc = low_iter(*acc, low_elem);
                     *acc = high_iter(*acc, high_elem);
                 }
-                inputs = <Inputs as FloatSequence>::hide(inputs);
+                <Inputs as FloatSequence>::hide_inplace(inputs);
             }
-            accumulators = hide_accumulators(accumulators);
+            hide_accumulators(accumulators);
         } else {
             // Otherwise, we just do the same as usual, but with input reuse
             let inputs_slice = inputs.as_ref();
@@ -239,7 +236,7 @@ pub fn integrate_halves<
                     *acc = low_iter(*acc, low_elem);
                     *acc = high_iter(*acc, high_elem);
                 }
-                accumulators = hide_accumulators(accumulators);
+                hide_accumulators(accumulators);
             }
         }
     } else {
@@ -258,7 +255,7 @@ pub fn integrate_halves<
                 *acc = low_iter(*acc, low_elem);
                 *acc = high_iter(*acc, high_elem);
             }
-            accumulators = hide_accumulators(accumulators);
+            hide_accumulators(accumulators);
         }
         for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
             *acc = low_iter(*acc, low_elem);
@@ -267,7 +264,6 @@ pub fn integrate_halves<
             *acc = high_iter(*acc, high_elem);
         }
     }
-    (accumulators, inputs)
 }
 
 /// Minimal optimization barrier needed to avoid accumulator autovectorization
@@ -300,12 +296,12 @@ pub fn integrate_halves<
 /// and nothing for SSE and scalar types (it is not legal to disable SSE for
 /// better scalar codegen on x86_64).
 #[inline]
-pub fn hide_accumulators<T: FloatLike, const ILP: usize>(mut accumulators: [T; ILP]) -> [T; ILP] {
+pub fn hide_accumulators<T: FloatLike, const ILP: usize>(accumulators: &mut [T; ILP]) {
     // No need for pessimize::hide() optimization barriers if this accumulation
     // cannot be autovectorized because e.g. we are operating at the maximum
     // hardware-supported SIMD vector width.
     let Some(min_vector_ilp) = T::MIN_VECTORIZABLE_ILP else {
-        return accumulators;
+        return;
     };
 
     // Otherwise apply pessimize::hide() to a set of accumulators which is large
@@ -324,7 +320,6 @@ pub fn hide_accumulators<T: FloatLike, const ILP: usize>(mut accumulators: [T; I
         let new_acc = pessimize::hide::<T>(old_acc);
         *acc = new_acc;
     }
-    accumulators
 }
 
 /// Consume accumulators at the end of a benchmark run

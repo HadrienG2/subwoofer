@@ -95,7 +95,8 @@ impl<T: FloatLike, const N: usize> FloatSet for [T; N] {
     #[inline]
     fn make_sequence(&mut self, rng: &mut impl Rng) -> Self {
         self.shuffle(rng);
-        <[T; N] as FloatSequence>::hide(*self)
+        <[T; N] as FloatSequence>::hide_inplace(self);
+        *self
     }
 }
 //
@@ -138,7 +139,7 @@ pub trait FloatSequence: AsRef<[Self::Element]> + Copy {
     ///
     /// Implementations must be marked `#[inline]` as this may be used inside of
     /// the timed benchmark loop.
-    fn hide(self) -> Self;
+    fn hide_inplace(&mut self);
 
     /// CPU floating-point registers that are used by this input data
     ///
@@ -153,8 +154,10 @@ impl<T: FloatLike, const N: usize> FloatSequence for [T; N] {
     type Element = T;
 
     #[inline]
-    fn hide(self) -> Self {
-        self.map(pessimize::hide::<T>)
+    fn hide_inplace(&mut self) {
+        for elem in self {
+            *elem = pessimize::hide::<T>(*elem);
+        }
     }
 
     const NUM_REGISTER_INPUTS: Option<usize> = Some(N);
@@ -166,8 +169,8 @@ impl<T: FloatLike> FloatSequence for &[T] {
     type Element = T;
 
     #[inline]
-    fn hide(self) -> Self {
-        pessimize::hide::<&[T]>(self)
+    fn hide_inplace(&mut self) {
+        *self = pessimize::hide::<&[T]>(*self)
     }
 
     const NUM_REGISTER_INPUTS: Option<usize> = None;

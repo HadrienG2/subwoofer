@@ -51,13 +51,13 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(mut self, inputs: Inputs) -> (Self, Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        let iter = move |acc: T, factor, addend| {
-            (acc.mul_add(factor, addend) + self.target) * T::splat(0.5)
-        };
+        let target = self.target;
+        let iter =
+            move |acc: T, factor, addend| (acc.mul_add(factor, addend) + target) * T::splat(0.5);
         let inputs_slice = inputs.as_ref();
         let (factor_inputs, addend_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
         if Inputs::IS_REUSED {
@@ -66,7 +66,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
                 for acc in self.accumulators.iter_mut() {
                     *acc = iter(*acc, factor, addend);
                 }
-                self.accumulators = operations::hide_accumulators(self.accumulators);
+                operations::hide_accumulators(&mut self.accumulators);
             }
         } else {
             let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -81,7 +81,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
                 {
                     *acc = iter(*acc, factor, addend);
                 }
-                self.accumulators = operations::hide_accumulators(self.accumulators);
+                operations::hide_accumulators(&mut self.accumulators);
             }
             for ((&factor, &addend), acc) in factor_remainder
                 .iter()
@@ -91,7 +91,6 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
                 *acc = iter(*acc, factor, addend);
             }
         }
-        (self, inputs)
     }
 
     #[inline]

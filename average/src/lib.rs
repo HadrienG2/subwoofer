@@ -57,16 +57,13 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AverageBenchmark<T, ILP> {
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(mut self, inputs: Inputs) -> (Self, Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        let (next_accs, next_inputs) =
-            operations::integrate_full(self.accumulators, inputs, |acc, elem| {
-                (acc + elem) * T::splat(0.5)
-            });
-        self.accumulators = next_accs;
-        (self, next_inputs)
+        operations::integrate_full(&mut self.accumulators, inputs, |acc, elem| {
+            (acc + elem) * T::splat(0.5)
+        });
     }
 
     #[inline]

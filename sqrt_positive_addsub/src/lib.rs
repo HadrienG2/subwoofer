@@ -51,20 +51,20 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(mut self, inputs: Inputs) -> (Self, Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
         let low_iter = |acc, elem: T| acc + elem.sqrt();
         let high_iter = |acc, elem: T| acc - elem.sqrt();
-        let (next_accs, next_inputs) = if Inputs::IS_REUSED {
+        if Inputs::IS_REUSED {
             // Need to hide reused register inputs, so that the compiler
             // doesn't abusively factor out the redundant square root
             // computations and reuse their result for all accumulators (in
             // fact it would even be allowed to reuse them for the entire
             // outer iters loop in run_benchmark).
             operations::integrate_halves::<_, _, ILP, true>(
-                self.accumulators,
+                &mut self.accumulators,
                 inputs,
                 low_iter,
                 high_iter,
@@ -78,14 +78,12 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
             // input data.
             assert!(Inputs::NUM_REGISTER_INPUTS.is_none());
             operations::integrate_halves::<_, _, ILP, false>(
-                self.accumulators,
+                &mut self.accumulators,
                 inputs,
                 low_iter,
                 high_iter,
             )
         };
-        self.accumulators = next_accs;
-        (self, next_inputs)
     }
 
     #[inline]
