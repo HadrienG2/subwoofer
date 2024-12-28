@@ -46,25 +46,26 @@ function bench_each_type() {
         fi
     }
     if [[ $(lscpu | grep x86) ]]; then
-        # HACK: Use an inconsequential target-feature flag to start from a
-        #       non-empty list, as empty list is hard for bash
-        COMMON_FLAGS="-C target-feature=+ermsb"
         if [[ $(lscpu | grep fma) ]]; then
-            COMMON_FLAGS="${COMMON_FLAGS},+fma"
+            FMA_FLAGS="-C target-feature=+fma"
+        else
+            FMA_FLAGS="-C target-feature=-fma"
         fi
         if [[ $(lscpu | grep avx512vl) ]]; then
-            RUSTFLAGS="${COMMON_FLAGS},+avx512f,+avx512vl" $* --bench=f32x16 --bench=f64x08
+            RUSTFLAGS="${FMA_FLAGS},+avx512f,+avx512vl" $* --bench=f32x16 --bench=f64x08
             rename_perf opt.avx512
         fi
         if [[ $(lscpu | grep avx) ]]; then
-            RUSTFLAGS="${COMMON_FLAGS},+avx" $* --bench=f32x08 --bench=f64x04
+            RUSTFLAGS="${FMA_FLAGS},+avx" $* --bench=f32x08 --bench=f64x04
             rename_perf opt.avx
         fi
+        # Should not activate FMA for <= SSE, as it also activates AVX and thus
+        # degrades codegen.
         if [[ $(lscpu | grep sse2) ]]; then
-            RUSTFLAGS="${COMMON_FLAGS},+sse2" $* --bench=f32x04 --bench=f64x02
+            RUSTFLAGS="-C target-feature=-fma,+sse2" $* --bench=f32x04 --bench=f64x02
             rename_perf opt.sse2
         fi
-        RUSTFLAGS="${COMMON_FLAGS}" $* --bench=f32 --bench=f64
+        RUSTFLAGS="-C target-feature=-fma" $* --bench=f32 --bench=f64
         rename_perf opt.scalar
     else
         if [[ -v WARNED_ABOUT_TARGET_FEATURES ]]; then

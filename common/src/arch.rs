@@ -23,8 +23,7 @@ pub const MIN_FLOAT_REGISTERS: usize = const {
             }
         }
         Architecture::X86 => {
-            if target.supports_feature_str("avx512f") {
-                assert!(target.supports_feature_str("avx512vl"));
+            if target.supports_feature_str("avx512vl") {
                 32
             } else {
                 16
@@ -47,6 +46,16 @@ pub const HAS_MEMORY_OPERANDS: bool = const {
     let target = target_features::CURRENT_TARGET;
     match target.architecture() {
         Architecture::X86 => true,
+        // TODO: Check for other architectures
+        _ => false,
+    }
+};
+
+/// Truth that the current hardware architecture is known to have native FMA
+pub const HAS_HARDWARE_FMA: bool = const {
+    let target = target_features::CURRENT_TARGET;
+    match target.architecture() {
+        Architecture::X86 => target.supports_feature_str("fma"),
         // TODO: Check for other architectures
         _ => false,
     }

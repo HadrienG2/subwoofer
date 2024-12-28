@@ -2,7 +2,10 @@
 
 use crate::inputs::{self, DataSourceConfiguration};
 use common::{
-    arch::MIN_FLOAT_REGISTERS, floats::FloatLike, inputs::FloatSet, operation::Operation,
+    arch::{HAS_HARDWARE_FMA, MIN_FLOAT_REGISTERS},
+    floats::FloatLike,
+    inputs::FloatSet,
+    operation::Operation,
 };
 use criterion::Criterion;
 use rand::prelude::*;
@@ -32,12 +35,14 @@ pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
     benchmark_operation::<_, average::Average>(&mut config);
     #[cfg(feature = "bench_mul_average")]
     benchmark_operation::<_, mul_average::MulAverage>(&mut config);
-    #[cfg(feature = "bench_fma_multiplier_average")]
-    benchmark_operation::<_, fma_multiplier_average::FmaMultiplierAverage>(&mut config);
-    #[cfg(feature = "bench_fma_addend_average")]
-    benchmark_operation::<_, fma_addend_average::FmaAddendAverage>(&mut config);
-    #[cfg(feature = "bench_fma_full_average")]
-    benchmark_operation::<_, fma_full_average::FmaFullAverage>(&mut config);
+    if HAS_HARDWARE_FMA {
+        #[cfg(feature = "bench_fma_multiplier_average")]
+        benchmark_operation::<_, fma_multiplier_average::FmaMultiplierAverage>(&mut config);
+        #[cfg(feature = "bench_fma_addend_average")]
+        benchmark_operation::<_, fma_addend_average::FmaAddendAverage>(&mut config);
+        #[cfg(feature = "bench_fma_full_average")]
+        benchmark_operation::<_, fma_full_average::FmaFullAverage>(&mut config);
+    }
 }
 
 /// Benchmark a certain data type, in a certain ILP configurations, using input
