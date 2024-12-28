@@ -2,6 +2,32 @@
 
 use target_features::Architecture;
 
+/// Truth that the current hardware architecture is known to have native FMA
+pub const HAS_HARDWARE_FMA: bool = const {
+    let target = target_features::CURRENT_TARGET;
+    match target.architecture() {
+        Architecture::X86 => target.supports_feature_str("fma"),
+        // TODO: Check for other architectures
+        _ => false,
+    }
+};
+
+/// Truth that the current hardware architecture is known to support memory
+/// operands for scalar and SIMD operations.
+///
+/// This means that when we are doing benchmarks like `addsub` that directly
+/// reduce memory inputs into accumulators, we don't need to load inputs into
+/// CPU registers before reducing them into the accumulator. As a result, we can
+/// use more CPU registers as accumulators on those benchmarks.
+pub const HAS_MEMORY_OPERANDS: bool = const {
+    let target = target_features::CURRENT_TARGET;
+    match target.architecture() {
+        Architecture::X86 => true,
+        // TODO: Check for other architectures
+        _ => false,
+    }
+};
+
 /// Lower bound on the number of architectural scalar/SIMD registers.
 ///
 /// To exhaustively cover all hardware-allowed configurations, this should
@@ -23,9 +49,10 @@ pub const MIN_FLOAT_REGISTERS: usize = const {
             }
         }
         Architecture::X86 => {
-            // Technically the requirement is avx512f for 512-bit registers and
-            // avx512vl for other register widths, but as of today there are no
-            // CPUs that support avx512f without supporting avx512vl.
+            // Technically we need avx512f for 512-bit registers and avx512vl
+            // for other register widths, but as of today there are no CPUs that
+            // support avx512f without supporting avx512vl, so there is no need
+            // to make MIN_FLOAT_REGISTERS depend on the register type yet.
             if target.supports_feature_str("avx512vl") {
                 32
             } else {
@@ -35,31 +62,5 @@ pub const MIN_FLOAT_REGISTERS: usize = const {
         Architecture::RiscV => 32,
         // TODO: Check for other architectures
         _ => 16,
-    }
-};
-
-/// Truth that the current hardware architecture is known to support memory
-/// operands for scalar and SIMD operations.
-///
-/// This means that when we are doing benchmarks like `addsub` that directly
-/// reduce memory inputs into accumulators, we don't need to load inputs into
-/// CPU registers before reducing them into the accumulator. As a result, we can
-/// use more CPU registers as accumulators on those benchmarks.
-pub const HAS_MEMORY_OPERANDS: bool = const {
-    let target = target_features::CURRENT_TARGET;
-    match target.architecture() {
-        Architecture::X86 => true,
-        // TODO: Check for other architectures
-        _ => false,
-    }
-};
-
-/// Truth that the current hardware architecture is known to have native FMA
-pub const HAS_HARDWARE_FMA: bool = const {
-    let target = target_features::CURRENT_TARGET;
-    match target.architecture() {
-        Architecture::X86 => target.supports_feature_str("fma"),
-        // TODO: Check for other architectures
-        _ => false,
     }
 };

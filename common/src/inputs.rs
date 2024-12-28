@@ -5,7 +5,7 @@ use rand::prelude::*;
 
 /// Fill a buffer with positive normal and subnormal inputs
 ///
-/// The order of normal vs subnormal inputs is not randomized, this will be
+/// The order of normal vs subnormal inputs is not randomized yet, this will be
 /// taken care of by [`make_sequence()`](FloatSet::make_sequence()) later on.
 pub fn generate_positive<T: FloatLike, R: Rng>(set: &mut [T], rng: &mut R, num_subnormals: usize) {
     assert!(num_subnormals <= set.len());
@@ -51,7 +51,8 @@ pub fn generate_positive<T: FloatLike, R: Rng>(set: &mut [T], rng: &mut R, num_s
 ///
 /// The former is achieved by [`generate_positive()`], while the latter is
 /// achieved by an input reordering step between benchmark iteration batches.
-/// The `FloatSet`/`FloatSequence` dichotomy enforces such a reordering step.
+/// The [`FloatSet`]/[`FloatSequence`] dichotomy enforces such a reordering
+/// step.
 pub trait FloatSet: AsMut<[Self::Element]> {
     /// Floating-point elements that compose this set
     type Element: FloatLike;

@@ -51,6 +51,9 @@ pub trait FloatLike:
     ///   from exponent overflow and underflow during this random walk.
     ///
     /// For SIMD types, we generate a vector of such floats.
+    ///
+    /// This should be `#[inline]` because some benchmarks call this as part of
+    /// their initialization procedure.
     fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self;
 
     /// Random distribution of positive subnormal floats
@@ -93,13 +96,16 @@ pub trait FloatLike:
 }
 //
 impl FloatLike for f32 {
+    #[inline]
     fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
         let dist = Uniform::new(-1.0, 1.0);
+        #[inline]
         move |rng| 2.0f32.powf(rng.sample(dist))
     }
 
     fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
         let dist = Uniform::new(2.0f32.powi(-149), 2.0f32.powi(-126));
+        #[inline]
         move |rng| rng.sample(dist)
     }
 
@@ -143,8 +149,10 @@ impl FloatLike for f32 {
 }
 //
 impl FloatLike for f64 {
+    #[inline]
     fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
         let dist = Uniform::new(-1.0, 1.0);
+        #[inline]
         move |rng| 2.0f64.powf(rng.sample(dist))
     }
 
@@ -194,8 +202,10 @@ where
     LaneCount<WIDTH>: SupportedLaneCount,
     Self: Pessimize + StdFloat,
 {
+    #[inline]
     fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
         let sampler = f32::normal_sampler();
+        #[inline]
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
@@ -263,8 +273,10 @@ where
     LaneCount<WIDTH>: SupportedLaneCount,
     Self: Pessimize + StdFloat,
 {
+    #[inline]
     fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
         let sampler = f64::normal_sampler();
+        #[inline]
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 

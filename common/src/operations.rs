@@ -67,7 +67,7 @@ pub trait Benchmark: Copy {
     /// benchmark loop iteration. In most cases, they can just be returned
     /// as-is, but if the compiler can hoist computations out of the benchmark
     /// loop under the knowledge that the inputs are always the same, then you
-    /// will have to pass inputs through a `pessimize::hide()` barrier, which
+    /// will have to pass inputs through a [`pessimize::hide()`] barrier, which
     /// may come at the expense of less optimal codegen.
     ///
     /// If your benchmark sequentially feeds all inputs to a single accumulator,
