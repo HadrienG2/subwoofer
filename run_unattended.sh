@@ -48,9 +48,10 @@ function bench_each_type() {
         fi
     }
     # Benchmark a number of floating-point types and rename their perf.data
+    export BENCH_COMMAND="$*"
     function bench_types() {
         for type in $*; do
-            $* --bench=${type}
+            ${BENCH_COMMAND} --bench=${type}
             rename_perf opt.${type}
         done
     }
@@ -88,9 +89,10 @@ function bench_each_type() {
             echo '--- WARNING: Unknown hardware architecture, target features may be suboptimal ---'
             WARNED_ABOUT_TARGET_FEATURES=1
         fi
-        $* --benches
+        ${BENCH_COMMAND} --benches
         rename_perf native
     fi
+    unset BENCH_COMMAND
 }
 
 # Decide which flags must be applied to perf record on this CPU
