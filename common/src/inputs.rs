@@ -153,11 +153,8 @@ impl<T: FloatLike, const N: usize> FloatSequence for [T; N] {
     type Element = T;
 
     #[inline]
-    fn hide(mut self) -> Self {
-        for elem in self.iter_mut() {
-            *elem = pessimize::hide::<T>(*elem);
-        }
-        self
+    fn hide(self) -> Self {
+        self.map(pessimize::hide::<T>)
     }
 
     const NUM_REGISTER_INPUTS: Option<usize> = Some(N);

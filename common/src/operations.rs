@@ -215,9 +215,10 @@ pub fn integrate_halves<
             // This ensures that the optimization barrier is maximally allowed
             // to reuse the same registers for the original and hidden inputs,
             // at the expense of making it harder for the CPU to extract ILP if
-            // the backend doesn't reorder instructions, because the CPU
-            // frontend must now dive through N mentions of an accumulator
-            // before reaching mentions of another (no unroll & jam).
+            // the backend doesn't reorder instructions across the optimization
+            // battier, because the CPU frontend must now dive through N
+            // mentions of an accumulator before reaching mentions of another
+            // (we effectively lose the "jam" part of unroll & jam).
             for acc in accumulators.iter_mut() {
                 let inputs_slice = inputs.as_ref();
                 let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
@@ -226,11 +227,9 @@ pub fn integrate_halves<
                     *acc = low_iter(*acc, low_elem);
                     *acc = high_iter(*acc, high_elem);
                 }
-                // Autovectorization barrier must target one accumulator at a
-                // time here due to the input/accumulator loop transpose.
-                *acc = pessimize::hide::<T>(*acc);
                 inputs = <Inputs as FloatSequence>::hide(inputs);
             }
+            accumulators = hide_accumulators(accumulators);
         } else {
             // Otherwise, we just do the same as usual, but with input reuse
             let inputs_slice = inputs.as_ref();
@@ -322,7 +321,9 @@ pub fn hide_accumulators<T: FloatLike, const ILP: usize>(mut accumulators: [T; I
     let max_elided_barriers = min_vector_ilp.get() - 1;
     let min_hidden_accs = ILP.saturating_sub(max_elided_barriers);
     for acc in accumulators.iter_mut().take(min_hidden_accs) {
-        *acc = pessimize::hide::<T>(*acc);
+        let old_acc = *acc;
+        let new_acc = pessimize::hide::<T>(old_acc);
+        *acc = new_acc;
     }
     accumulators
 }
