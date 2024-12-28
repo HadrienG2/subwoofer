@@ -59,16 +59,16 @@ pub trait Benchmark: Copy {
     ///
     /// Implementations should be marked `#[inline]` to give the compiler a more
     /// complete picture of the underlying data flow.
-    fn begin_run(&mut self, rng: impl Rng);
+    fn begin_run(self, rng: impl Rng) -> Self;
 
     /// Integrate a new batch of inputs into the internal state
     ///
     /// Inputs must be returned in a state suitable for reuse on the next
-    /// benchmark loop iteration. In most cases, they can just be returned
-    /// as-is, but if the compiler can hoist computations out of the benchmark
-    /// loop under the knowledge that the inputs are always the same, then you
-    /// will have to pass inputs through a [`pessimize::hide()`] barrier, which
-    /// may come at the expense of less optimal codegen.
+    /// benchmark loop iteration. In most cases, they can just be left as-is,
+    /// but if the compiler can hoist computations out of the benchmark loop
+    /// under the knowledge that the inputs are always the same, then you will
+    /// have to pass inputs through a [`pessimize::hide()`] barrier, which may
+    /// come at the expense of less optimal codegen.
     ///
     /// If your benchmark sequentially feeds all inputs to a single accumulator,
     /// you may use the provided [`integrate_full()`] skeleton to implement this
@@ -99,7 +99,7 @@ pub trait Benchmark: Copy {
 
 /// Measure the performance of a [`Benchmark`] on certain inputs
 pub fn run_benchmark<B: Benchmark>(
-    mut benchmark: B,
+    benchmark: B,
     group: &mut BenchmarkGroup<WallTime>,
     mut inputs: impl FloatSet<Element = B::Float>,
     input_name: String,
@@ -116,7 +116,7 @@ pub fn run_benchmark<B: Benchmark>(
             // - Inputs are randomly reordered from one batch to another, which
             //   will avoid input order-related hardware bias if criterion runs
             //   enough batches (as it does in its default configuration).
-            benchmark.begin_run(&mut rng);
+            let mut benchmark = benchmark.begin_run(&mut rng);
             let mut inputs = inputs.make_sequence(&mut rng);
 
             // Timed region, this is the danger zone where inlining and compiler
@@ -324,8 +324,8 @@ pub fn hide_accumulators<T: FloatLike, const ILP: usize>(accumulators: &mut [T; 
 
 /// Consume accumulators at the end of a benchmark run
 #[inline]
-pub fn consume_accumulators<T: FloatLike, const ILP: usize>(accs: [T; ILP]) {
-    for acc in accs {
-        pessimize::consume::<T>(acc)
+pub fn consume_accumulators<T: FloatLike, const ILP: usize>(accumulators: [T; ILP]) {
+    for acc in accumulators {
+        pessimize::consume::<T>(acc);
     }
 }

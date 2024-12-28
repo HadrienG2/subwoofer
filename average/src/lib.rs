@@ -52,8 +52,10 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AverageBenchmark<T, ILP> {
     }
 
     #[inline]
-    fn begin_run(&mut self, rng: impl Rng) {
-        self.accumulators = operations::normal_accumulators(rng);
+    fn begin_run(self, rng: impl Rng) -> Self {
+        Self {
+            accumulators: operations::normal_accumulators(rng),
+        }
     }
 
     #[inline]

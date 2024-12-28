@@ -43,11 +43,13 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
     }
 
     #[inline]
-    fn begin_run(&mut self, rng: impl Rng) {
+    fn begin_run(self, rng: impl Rng) -> Self {
         // This is just a random additive walk of ~unity or subnormal step, so
         // given a high enough starting point, an initially normal accumulator
         // should stay in the normal range forever.
-        self.accumulators = operations::additive_accumulators(rng);
+        Self {
+            accumulators: operations::additive_accumulators(rng),
+        }
     }
 
     #[inline]

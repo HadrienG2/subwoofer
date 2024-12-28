@@ -44,14 +44,18 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
     }
 
     #[inline]
-    fn begin_run(&mut self, mut rng: impl Rng) {
+    fn begin_run(self, mut rng: impl Rng) -> Self {
         let normal_sampler = T::normal_sampler();
-        self.accumulators = operations::normal_accumulators(&mut rng);
-        self.target = normal_sampler(&mut rng);
+        let target = normal_sampler(&mut rng);
+        let accumulators = operations::normal_accumulators(rng);
+        Self {
+            accumulators,
+            target,
+        }
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
