@@ -156,7 +156,9 @@ impl<T: FloatLike, const N: usize> FloatSequence for [T; N] {
     #[inline]
     fn hide_inplace(&mut self) {
         for elem in self {
-            *elem = pessimize::hide::<T>(*elem);
+            let old_elem = *elem;
+            let new_elem = pessimize::hide::<T>(old_elem);
+            *elem = new_elem;
         }
     }
 
