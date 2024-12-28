@@ -31,7 +31,7 @@ version = "1.0.0"
 
 [workspace.dependencies]
 common = { path = "./common" }
-criterion = { version = "0.5", default-features = false, features = ["rayon"] }
+criterion = { version = "0.5", default-features = false }
 pessimize = { version = "2.0", features = ["nightly"] }
 rand = "0.8.5"
 target-features = "0.1"
@@ -127,7 +127,7 @@ measure = [
 # Without this, "cargo bench" runs do not generate criterion reports, and one
 # needs to use "cargo criterion" instead. This speeds up the criterion build
 # because now benchmarks do not need to bundle a full report generator.
-cargo_bench_support = ["criterion/cargo_bench_support", "criterion/plotters"]
+cargo_bench_support = ["criterion/cargo_bench_support", "criterion/plotters", "criterion/rayon"]
 
 # Full set of supported microbenchmarks
 bench_all = [
