@@ -212,13 +212,12 @@ pub fn integrate_halves<
             // inputs and accumulators so that each set of inputs is fully
             // processed before we switch accumulators.
             //
-            // This ensures that the optimization barrier is maximally allowed
-            // to reuse the same registers for the original and hidden inputs,
-            // at the expense of making it harder for the CPU to extract ILP if
-            // the backend doesn't reorder instructions across the optimization
-            // battier, because the CPU frontend must now dive through N
-            // mentions of an accumulator before reaching mentions of another
-            // (we effectively lose the "jam" part of unroll & jam).
+            // This minimizes the number of input optimization barriers, at the
+            // expense of making it harder for the CPU to extract ILP if the
+            // backend doesn't reorder instructions across the optimization
+            // barrier, because the CPU frontend must now dive through N
+            // mentions of an accumulator before reaching mentions of the next
+            // accumulator (we lose the "jam" part of unroll & jam).
             for acc in accumulators.iter_mut() {
                 let inputs_slice = inputs.as_ref();
                 let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
