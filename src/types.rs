@@ -21,8 +21,8 @@ pub struct TypeBenchmark<'criterion> {
 impl<'criterion> TypeBenchmark<'criterion> {
     /// Set up a type benchmark harness
     pub fn new(criterion: &'criterion mut Criterion) -> Self {
-        // Find out how many bytes of data we can reliably fits in L1, L2, ... and
-        // add a dataset size that only fits in RAM for completeness
+        // Find out how many bytes of data we can reliably fits in L1, L2, ...
+        // and add a dataset size that does not fit in any for completeness
         let cache_stats = Topology::new().unwrap().cpu_cache_stats().unwrap();
         let smallest_data_cache_sizes = cache_stats.smallest_data_cache_sizes();
         let max_size_to_fit = |cache_size: u64| cache_size / 2;
@@ -57,6 +57,7 @@ impl<'criterion> TypeBenchmark<'criterion> {
     /// In order to work around name sorting limitations in criterion's reports,
     /// SIMD type names like "f32x8" should have their lane count padded with
     /// leading zeros so that they all have the same number of digits.
+    #[inline(never)] // Faster build + easier profiling
     pub fn benchmark_type<T: FloatLike>(&mut self, t_name: &'static str) -> &mut Self {
         // Set up memory inputs for this type
         let mut memory_inputs = self

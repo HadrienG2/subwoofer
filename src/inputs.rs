@@ -1,6 +1,6 @@
 //! Benchmarking of individual data sources (registers, L1/L2/L3 caches, RAM...)
 
-use common::{inputs::FloatSet, operation::Benchmark};
+use common::operations::{self, Benchmark};
 use criterion::{measurement::WallTime, BenchmarkGroup};
 use rand::prelude::*;
 
@@ -49,7 +49,7 @@ pub(crate) fn benchmark_registers<B: Benchmark, const INPUT_REGISTERS: usize>(
         // Generate input data
         let num_subnormals = subnormal_share * INPUT_REGISTERS / num_subnormal_configurations;
         let mut inputs = [B::Float::default(); INPUT_REGISTERS];
-        inputs.generate_positive(&mut config.rng, num_subnormals);
+        common::inputs::generate_positive(&mut inputs, &mut config.rng, num_subnormals);
 
         // Name this subnormal configuration
         let input_name = format!(
@@ -59,9 +59,13 @@ pub(crate) fn benchmark_registers<B: Benchmark, const INPUT_REGISTERS: usize>(
         );
 
         // Run all the benchmarks on this input
-        config
-            .benchmark
-            .run(config.group, inputs, input_name, &mut config.rng);
+        operations::run_benchmark(
+            config.benchmark,
+            config.group,
+            inputs,
+            input_name,
+            &mut config.rng,
+        );
     }
 }
 
@@ -70,17 +74,15 @@ pub(crate) fn benchmark_registers<B: Benchmark, const INPUT_REGISTERS: usize>(
 #[inline(never)] // Faster build + easier profiling
 pub(crate) fn benchmark_memory<B: Benchmark>(
     mut config: DataSourceConfiguration<B>,
-    mut input_storage: &mut [B::Float],
+    input_storage: &mut [B::Float],
 ) {
     // Iterate over subnormal configurations
     for subnormal_probability in 0..=MAX_SUBNORMAL_CONFIGURATIONS {
         // Generate input data
         let subnormal_probability =
             subnormal_probability as f64 / MAX_SUBNORMAL_CONFIGURATIONS as f64;
-        input_storage.generate_positive(
-            &mut config.rng,
-            (subnormal_probability * input_storage.len() as f64).round() as usize,
-        );
+        let num_subnormals = (subnormal_probability * input_storage.len() as f64).round() as usize;
+        common::inputs::generate_positive(input_storage, &mut config.rng, num_subnormals);
 
         // Name this subnormal configuration
         let input_name = format!(
@@ -90,7 +92,8 @@ pub(crate) fn benchmark_memory<B: Benchmark>(
         );
 
         // Run all the benchmarks on this input
-        config.benchmark.run(
+        operations::run_benchmark(
+            config.benchmark,
             config.group,
             &mut *input_storage,
             input_name,

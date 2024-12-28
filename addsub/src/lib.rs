@@ -2,7 +2,7 @@ use common::{
     arch::HAS_MEMORY_OPERANDS,
     floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
-    operation::{self, Benchmark, Operation},
+    operations::{self, Benchmark, Operation},
 };
 use rand::Rng;
 
@@ -38,11 +38,12 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
         inputs.reused_len(ILP)
     }
 
+    #[inline]
     fn begin_run(&mut self, rng: impl Rng) {
-        // This is just a random additive walk of ~unity or subnormal step, so given a
-        // high enough starting point, an initially normal accumulator should stay in
-        // the normal range forever.
-        self.accumulators = operation::additive_accumulators(rng);
+        // This is just a random additive walk of ~unity or subnormal step, so
+        // given a high enough starting point, an initially normal accumulator
+        // should stay in the normal range forever.
+        self.accumulators = operations::additive_accumulators(rng);
     }
 
     #[inline]
@@ -50,9 +51,9 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        // No need for input hiding here, the compiler cannot do anything dangerous
-        // with the knowledge that inputs are always the same in this benchmark.
-        let (next_accs, next_inputs) = operation::integrate_halves::<_, _, ILP, false>(
+        // No need for input hiding here, the compiler cannot do anything
+        // dangerous with the knowledge that inputs are always the same.
+        let (next_accs, next_inputs) = operations::integrate_halves::<_, _, ILP, false>(
             self.accumulators,
             inputs,
             |acc, elem| acc + elem,
@@ -62,7 +63,8 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
         (self, next_inputs)
     }
 
+    #[inline]
     fn consume_outputs(self) {
-        operation::consume_accumulators(self.accumulators);
+        operations::consume_accumulators(self.accumulators);
     }
 }

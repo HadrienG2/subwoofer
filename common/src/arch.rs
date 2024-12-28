@@ -23,6 +23,9 @@ pub const MIN_FLOAT_REGISTERS: usize = const {
             }
         }
         Architecture::X86 => {
+            // Technically the requirement is avx512f for 512-bit registers and
+            // avx512vl for other register widths, but as of today there are no
+            // CPUs that support avx512f without supporting avx512vl.
             if target.supports_feature_str("avx512vl") {
                 32
             } else {

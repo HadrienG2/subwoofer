@@ -2,7 +2,7 @@ use common::{
     arch::HAS_MEMORY_OPERANDS,
     floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
-    operation::{self, Benchmark, Operation},
+    operations::{self, Benchmark, Operation},
 };
 use rand::Rng;
 
@@ -41,9 +41,10 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaMultiplierAverageBenchmark
         inputs.reused_len(ILP)
     }
 
+    #[inline]
     fn begin_run(&mut self, mut rng: impl Rng) {
         let normal_sampler = T::normal_sampler();
-        self.accumulators = operation::multiplicative_accumulators(&mut rng);
+        self.accumulators = operations::normal_accumulators(&mut rng);
         self.target = normal_sampler(&mut rng);
     }
 
@@ -54,14 +55,15 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaMultiplierAverageBenchmark
     {
         let halve_weight = T::splat(0.5);
         let (next_accs, next_inputs) =
-            operation::integrate_full(self.accumulators, inputs, move |acc, elem| {
+            operations::integrate_full(self.accumulators, inputs, move |acc, elem| {
                 (acc.mul_add(elem, halve_weight) + self.target) * halve_weight
             });
         self.accumulators = next_accs;
         (self, next_inputs)
     }
 
+    #[inline]
     fn consume_outputs(self) {
-        operation::consume_accumulators(self.accumulators);
+        operations::consume_accumulators(self.accumulators);
     }
 }

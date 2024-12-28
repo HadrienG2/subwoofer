@@ -26,17 +26,18 @@ pub trait FloatLike:
 {
     /// Random distribution of positive normal IEEE-754 floats
     ///
-    /// Our normal inputs follow the distribution of 2.0.pow(u), where u follows
-    /// a uniform distribution from -1 to 1. We use this distribution because it
-    /// has several good properties:
+    /// Our normal inputs follow the distribution of `2.0.pow(u)`, where `u`
+    /// follows a uniform distribution from -1 to 1. We use this distribution
+    /// because it has several good properties:
     ///
     /// - The numbers are close to 1, which is the optimum range for
     ///   floating-point arithmetic:
-    ///     * Starting from a value of order of magnitude 2^(MANTISSA_DIGITS/2),
-    ///       we can randomly add and subtract numbers close to 1 for a long
-    ///       time before we run into significant precision issues (due to the
-    ///       accumulator becoming too large) or cancelation/underflow issues
-    ///       (due to the accumulator becoming too small)
+    ///     * Starting from a value of order of magnitude
+    ///       `2.0.powi(MANTISSA_DIGITS/2)`, we can randomly add and subtract
+    ///       numbers close to 1 for a long time before we run into significant
+    ///       precision issues (due to the accumulator becoming too large) or
+    ///       cancelation/underflow issues (due to the accumulator becoming too
+    ///       small)
     ///     * Starting from a value of order of magnitude 1, we can multiply or
     ///       divide by values close to 1 for a long time before hitting
     ///       exponent overflow or underflow issues.
@@ -44,8 +45,8 @@ pub trait FloatLike:
     ///   ensures that repeatedly multiplying by numbers from this distribution
     ///   results in a random walk: an accumulator that is repeatedly multiplied
     ///   by such values should oscillate around its initial value in
-    ///   multiplicative steps of at most * 2.0 or / 2.0 per iteration, with low
-    ///   odds of getting too large or too small if the RNG is working
+    ///   multiplicative steps of at most `* 2.0` or `/ 2.0` per iteration, with
+    ///   low odds of getting too large or too small if the RNG is working
     ///   correctly. If the accumulator starts close to 1, we are well protected
     ///   from exponent overflow and underflow during this random walk.
     ///
@@ -68,18 +69,23 @@ pub trait FloatLike:
     ///
     /// `None` means that this accumulator type has the maximal supported width
     /// for this hardware. Therefore autovectorization is impossible and
-    /// `pessimize::hide()` barriers on accumulators can be omitted.
+    /// [`pessimize::hide()`] barriers on accumulators can be omitted.
     ///
     /// If we don't know for the active hardware, we return `Some(2)` as a safe
     /// default, which means that all but one accumulator will need to go
     /// through a `pessimize::hide()` optimization barrier.
     ///
     /// This is a workaround for rustc/LLVM spilling accumulators to memory when
-    /// they are passed through `pessimize::hide()` in benchmarks that operates
-    /// from memory inputs. See [`hide_accumulators()`] for more context.
+    /// they are passed through [`pessimize::hide()`] in benchmarks that
+    /// operates from memory inputs. See
+    /// [`operations::hide_accumulators()`](crate::operations::hide_accumulators())
+    /// for more context.
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize>;
 
-    // We're also gonna need some float data & ops not exposed via std traits
+    // We're also gonna need some float data & ops not exposed via std traits.
+    //
+    // Implementations of all of these functions must be marked `#[inline]` as
+    // they will be called within the timed benchmark loop.
     const MANTISSA_DIGITS: u32;
     fn splat(x: f32) -> Self;
     fn mul_add(self, factor: Self, addend: Self) -> Self;
@@ -99,8 +105,8 @@ impl FloatLike for f32 {
 
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
         if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
-            // Ignoring MMX, 3DNow!, and other legacy 64-bit x86 SIMD
-            // instruction sets which are not supported by compilers anymore
+            // Ignoring legacy 64-bit x86 SIMD instruction sets which are not
+            // even supported by compilers anymore
             if cfg!(any(target_arch = "x86_64", target_feature = "sse")) {
                 // rustc has been observed to generate code for half-vectors of
                 // f32, likely because they can be moved using a single movsd
@@ -127,12 +133,12 @@ impl FloatLike for f32 {
 
     #[inline]
     fn mul_add(self, factor: Self, addend: Self) -> Self {
-        self.mul_add(factor, addend)
+        f32::mul_add(self, factor, addend)
     }
 
     #[inline]
     fn sqrt(self) -> Self {
-        self.sqrt()
+        f32::sqrt(self)
     }
 }
 //
@@ -173,12 +179,12 @@ impl FloatLike for f64 {
 
     #[inline]
     fn mul_add(self, factor: Self, addend: Self) -> Self {
-        self.mul_add(factor, addend)
+        f64::mul_add(self, factor, addend)
     }
 
     #[inline]
     fn sqrt(self) -> Self {
-        self.sqrt()
+        f64::sqrt(self)
     }
 }
 //

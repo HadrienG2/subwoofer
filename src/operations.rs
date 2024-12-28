@@ -5,7 +5,7 @@ use common::{
     arch::{HAS_HARDWARE_FMA, MIN_FLOAT_REGISTERS},
     floats::FloatLike,
     inputs::FloatSet,
-    operation::Operation,
+    operations::Operation,
 };
 use criterion::Criterion;
 use rand::prelude::*;
@@ -26,6 +26,7 @@ pub(crate) struct TypeConfiguration<'criterion, 'memory_inputs, 'memory_input_na
 }
 
 /// Benchmark all enabled operations for a certain data type
+#[inline(never)] // Faster build + easier profiling
 pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
     #[cfg(feature = "bench_addsub")]
     benchmark_operation::<_, addsub::AddSub>(&mut config);
