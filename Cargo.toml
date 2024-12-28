@@ -48,11 +48,11 @@ codegen-units = 1
 debug = "line-tables-only"
 
 [profile.bench.package."*"]
-# Only workspace members need top optimizations, dependencies can use much less
-# aggressive optimization settings in order to achive better build performance
+# Only workspace members need top optimizations, dependencies can use less
+# aggressive optimization settings in order to improve build performance
 codegen-units = 256
 incremental = true
-opt-level = 1
+opt-level = 2
 
 [profile.release]
 # May slightly improve build and runtime perf
