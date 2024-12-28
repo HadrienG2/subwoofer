@@ -55,7 +55,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullAverageBenchmark<T, IL
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(&mut self, inputs: Inputs)
+    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
