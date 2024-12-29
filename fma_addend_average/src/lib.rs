@@ -14,7 +14,9 @@ impl<T: FloatLike> Operation<T> for FmaAddendAverage {
     const NAME: &str = "fma_addend_average";
 
     // One register for the averaging weight, another for the averaging target
-    const AUX_REGISTERS_REGOP: usize = 2;
+    fn aux_registers_regop(_input_registers: usize) -> usize {
+        2
+    }
 
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = 2 + (!HAS_MEMORY_OPERANDS) as usize;

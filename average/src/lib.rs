@@ -26,7 +26,9 @@ impl<T: FloatLike> Operation<T> for Average {
     const NAME: &str = "average";
 
     // Need a register to hold the averaging weight 0.5
-    const AUX_REGISTERS_REGOP: usize = 1;
+    fn aux_registers_regop(_input_registers: usize) -> usize {
+        1
+    }
 
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = 1 + (!HAS_MEMORY_OPERANDS) as usize;

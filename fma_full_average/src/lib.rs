@@ -14,7 +14,9 @@ impl<T: FloatLike> Operation<T> for FmaFullAverage {
     const NAME: &str = "fma_full_average";
 
     // One register for the averaging weight, another for the averaging target
-    const AUX_REGISTERS_REGOP: usize = 2;
+    fn aux_registers_regop(_input_registers: usize) -> usize {
+        2
+    }
 
     // Inputs are directly reduced into the accumulator, so we can use a memory
     // operand, but even on architectures with memory operands FMA does not

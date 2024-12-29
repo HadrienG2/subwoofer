@@ -13,7 +13,9 @@ pub struct AddSub;
 impl<T: FloatLike> Operation<T> for AddSub {
     const NAME: &str = "addsub";
 
-    const AUX_REGISTERS_REGOP: usize = 0;
+    fn aux_registers_regop(_input_registers: usize) -> usize {
+        0
+    }
 
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = (!HAS_MEMORY_OPERANDS) as usize;

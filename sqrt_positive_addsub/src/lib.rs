@@ -15,8 +15,13 @@ pub struct SqrtPositiveAddSub;
 impl<T: FloatLike> Operation<T> for SqrtPositiveAddSub {
     const NAME: &str = "sqrt_positive_addsub";
 
-    // Square root goes to a temporary before use...
-    const AUX_REGISTERS_REGOP: usize = 1;
+    // A square root must go to a temporary before use...
+    fn aux_registers_regop(input_registers: usize) -> usize {
+        // ...and unfortunately, it looks like the input optimization barrier
+        // that we apply to avoid sqrt-hoisting has the side-effect of
+        // pessimizing this into a full doubling of register pressure.
+        input_registers
+    }
 
     // ...but architectures without memory operands can reuse the register that
     // was used to load the input in order to hold the square root.

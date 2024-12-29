@@ -21,8 +21,9 @@ pub trait Operation<T: FloatLike>: Copy {
     /// This assumes the compiler does a perfect job at register allocation,
     /// which unfortunately is not always true, especially in the presence of
     /// optimization barriers like `pessimize::hide()` that may have the
-    /// side-effect of artificially increasing register pressure.
-    const AUX_REGISTERS_REGOP: usize;
+    /// side-effect of artificially increasing register pressure. But we
+    /// tolerate a bit of spill to the stack if there's a lot more arithmetic.
+    fn aux_registers_regop(input_registers: usize) -> usize;
 
     /// Like `AUX_REGISTERS_MEMOP`, but for memory operands
     const AUX_REGISTERS_MEMOP: usize;
@@ -98,6 +99,7 @@ pub trait Benchmark: Copy {
 }
 
 /// Measure the performance of a [`Benchmark`] on certain inputs
+#[inline(never)] // Faster build + easier profiling
 pub fn run_benchmark<B: Benchmark>(
     benchmark: B,
     group: &mut BenchmarkGroup<WallTime>,
