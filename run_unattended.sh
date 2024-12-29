@@ -23,6 +23,10 @@ rm -f perf.data*
 
 ### QUICK CHECK FOR SUBNORMAL ISSUES ###
 
+# Enable the parallel compiler frontend, we're gonna need it
+PARALLEL_RUSTFLAGS="-Z threads=$(nproc)"
+export RUSTFLAGS="${PARALLEL_RUSTFLAGS} -C target-cpu=native"
+
 # First, qualitatively check if subnormals seem to be a problem at all
 cargo criterion --features=check
 echo '=== If no operation is slowed down by subnormals, you can stop here ==='
@@ -58,11 +62,11 @@ function bench_each_type() {
     # Optimized codegen for x86
     if [[ $(lscpu | grep x86) ]]; then
         # Detect FMA support
-        FMA_FLAG='-C target-feature='
+        FMA_TARGET='-C target-feature='
         if [[ $(lscpu | grep fma) ]]; then
-            FMA_FLAG="${FMA_FLAG}+fma"
+            FMA_TARGET="${FMA_TARGET}+fma"
         else
-            FMA_FLAG="${FMA_FLAG}-fma"
+            FMA_TARGET="${FMA_TARGET}-fma"
         fi
         # Optimized AVX-512 codegen
         #
@@ -71,18 +75,18 @@ function bench_each_type() {
         # real-world CPU. So we need avx512vl for the benchmark to allow itself
         # to use all available 32 registers.
         if [[ $(lscpu | grep avx512vl) ]]; then
-            RUSTFLAGS="${FMA_FLAG},+avx512f,+avx512vl" bench_types f32x16 f64x08
+            RUSTFLAGS="${PARALLEL_RUSTFLAGS} ${FMA_TARGET},+avx512f,+avx512vl" bench_types f32x16 f64x08
         fi
         # Optimized AVX codegen
         if [[ $(lscpu | grep avx) ]]; then
-            RUSTFLAGS="${FMA_FLAG},+avx" bench_types f32x08 f64x04
+            RUSTFLAGS="${PARALLEL_RUSTFLAGS} ${FMA_TARGET},+avx" bench_types f32x08 f64x04
         fi
         # No FMA for SSE/scalar because it also activates AVX, and thus hurts
         # codegen as we need optimization barriers to avoid autovectorization
         if [[ $(lscpu | grep sse2) ]]; then
-            RUSTFLAGS='-C target-feature=+sse2' bench_types f32x04 f64x02
+            RUSTFLAGS="${PARALLEL_RUSTFLAGS} -C target-feature=+sse2" bench_types f32x04 f64x02
         fi
-        RUSTFLAGS='' bench_types f32 f64
+        RUSTFLAGS="${PARALLEL_RUSTFLAGS}" bench_types f32 f64
     else
         # Unoptimized codegen for unknown CPUs
         if [[ -v WARNED_ABOUT_TARGET_FEATURES ]]; then
