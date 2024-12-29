@@ -1,0 +1,12 @@
+[book]
+authors = ["Hadrien G."]
+description = "User guide and results of the Subwoofer subnormals performance analysis project"
+language = "en"
+multilingual = false
+src = "src"
+title = "Assessing the impact of subnormals with Subwoofer"
+
+[output.html]
+edit-url-template = "https://github.com/hadrienG2/subwoofer/edit/main/book/{path}"
+git-repository-url = "https://github.com/hadrienG2/subwoofer"
+smart-punctuation = true

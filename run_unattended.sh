@@ -114,8 +114,8 @@ fi
 #
 # For now, we are using cargo criterion, which only accepts a single --bench.
 function check_codegen() {
-    cargo build --profile=bench --features=codegen $*
-    perf record ${PERF_FLAGS} -- cargo criterion --features=codegen $* -- --profile-time=1
+    cargo build --profile=bench --features=measure_codegen $*
+    perf record ${PERF_FLAGS} -- cargo criterion --features=measure_codegen $* -- --profile-time=1
 }
 bench_each_type check_codegen
 

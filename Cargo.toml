@@ -107,16 +107,14 @@ check = [
 # profilers like perf or can be analyzed by static analysis tools like Cutter or
 # MAQAO. It does not increase the amount of execution configurations, so it is
 # not suitable for quantitative analysis.
-codegen = ["bench_all", "register_data_sources", "simd"]
+measure_codegen = ["bench_all", "register_data_sources", "simd"]
 
 # Run enough benchmarks to quantitatively assess the perf impact of subnormals
 #
 # This configuration contains everything needed to quantitatively assess the
 # worst-case impact of subnormals on typical hardware.
 measure = [
-    "bench_all",
-    "register_data_sources",
-    "simd",
+    "measure_codegen",
     "subnormal_freq_resolution_1in64",
 ]
 
