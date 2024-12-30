@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of FMA with a possibly subnormal addend, followed by averaging"
+description = "Benchmark of MUL followed by MAX"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "fma_addend_average"
+name = "mul_max"
 repository.workspace = true
 version.workspace = true
 

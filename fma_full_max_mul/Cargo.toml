@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of FMA with a possibly subnormal multiplier, followed by averaging"
+description = "Benchmark of FMA with possibly subnormal inputs&output, followed by MAX and MUL"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "fma_multiplier_average"
+name = "fma_full_max_mul"
 repository.workspace = true
 version.workspace = true
 

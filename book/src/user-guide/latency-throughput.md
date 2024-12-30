@@ -56,7 +56,7 @@ the input of the next one.
       fully prevents parallel instruction execution.
 
 There is unfortunately one exception to the "`chained` is latency-bound" general
-rule, which is the `sqrt_positive_addsub` benchmark. This benchmark does not
+rule, which is the `sqrt_positive_max` benchmark. This benchmark does not
 feature an SQRT → SQRT → SQRT... dependency chain, because performing such a
 sequence of operations while guaranteeing continued subnormal input is
 difficult. Therefore, this benchmark cannot currently be used to measure SQRT

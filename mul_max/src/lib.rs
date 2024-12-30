@@ -6,26 +6,14 @@ use common::{
 };
 use rand::Rng;
 
-/// Rolling average with some data inputs.
-///
-/// For multiplicative benchmarks, we're going to need to an extra averaging
-/// operation, otherwise once we've multiplied by a subnormal we'll stay in
-/// subnormal range forever.
-///
-/// It cannot be just an addition, because otherwise if we have no subnormal
-/// input we get unbounded growth, which is also a problem.
-///
-/// This benchmark measures the overhead of averaging with an in-register input
-/// in isolation, so that it can be subtracted from the overhead of X followed
-/// by averaging (with due respect paid to the existence of superscalar
-/// execution).
+/// MUL followed by MAX
 #[derive(Clone, Copy)]
-pub struct Average;
+pub struct MulMax;
 //
-impl<T: FloatLike> Operation<T> for Average {
-    const NAME: &str = "average";
+impl<T: FloatLike> Operation<T> for MulMax {
+    const NAME: &str = "mul_max";
 
-    // Need a register to hold the averaging weight 0.5
+    // One register for the 0.5 lower bound
     fn aux_registers_regop(_input_registers: usize) -> usize {
         1
     }
@@ -34,19 +22,19 @@ impl<T: FloatLike> Operation<T> for Average {
     const AUX_REGISTERS_MEMOP: usize = 1 + (!HAS_MEMORY_OPERANDS) as usize;
 
     fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
-        AverageBenchmark {
+        MulMaxBenchmark {
             accumulators: [Default::default(); ILP],
         }
     }
 }
 
-/// [`Benchmark`] of [`Average`]
+/// [`Benchmark`] of [`MulMax`]
 #[derive(Clone, Copy)]
-struct AverageBenchmark<T: FloatLike, const ILP: usize> {
+struct MulMaxBenchmark<T: FloatLike, const ILP: usize> {
     accumulators: [T; ILP],
 }
 //
-impl<T: FloatLike, const ILP: usize> Benchmark for AverageBenchmark<T, ILP> {
+impl<T: FloatLike, const ILP: usize> Benchmark for MulMaxBenchmark<T, ILP> {
     type Float = T;
 
     fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize {
@@ -65,9 +53,19 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AverageBenchmark<T, ILP> {
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        operations::integrate_full(&mut self.accumulators, inputs, |acc, elem| {
-            (acc + elem) * T::splat(0.5)
-        });
+        // No need to hide inputs for this benchmark, compiler can't exploit
+        // knowledge of input reuse here
+        operations::integrate_full::<_, _, ILP, false>(
+            &mut self.accumulators,
+            inputs,
+            move |acc, elem| {
+                // If elem is subnormal, the max takes us back to normal range,
+                // otherwise this is a truncated multiplicative random walk that
+                // cannot go lower than 0.5. In that case we can only use half of
+                // the available exponent range but that's still plenty enough.
+                (acc * elem).fast_max(T::splat(0.5))
+            },
+        );
     }
 
     #[inline]

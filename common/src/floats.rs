@@ -3,7 +3,7 @@
 use pessimize::Pessimize;
 use rand::{distributions::Uniform, prelude::*};
 #[cfg(feature = "simd")]
-use std::simd::{LaneCount, Simd, StdFloat, SupportedLaneCount};
+use std::simd::{cmp::SimdPartialOrd, LaneCount, Simd, StdFloat, SupportedLaneCount};
 use std::{
     num::NonZeroUsize,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
@@ -85,6 +85,28 @@ pub trait FloatLike:
     /// for more context.
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize>;
 
+    /// Element-wise (for SIMD) minimum function that is only IEEE-754 compliant
+    /// for normal, subnormal, +0.0 and +/-inf.
+    ///
+    /// If one of the inputs is a NaN or -0.0, the result is unspecified. This
+    /// allows the use of fast hardware comparison instructions that do not have
+    /// IEEE-compliant semantics.
+    ///
+    /// Implementations must be marked `#[inline]` as they will be called within
+    /// the timed benchmark loop.
+    fn fast_min(self, other: Self) -> Self;
+
+    /// Element-wise (for SIMD) maximum function that is only IEEE-754 compliant
+    /// for normal, subnormal, +0.0 and +/-inf.
+    ///
+    /// If one of the inputs is a NaN or -0.0, the result is unspecified. This
+    /// allows the use of fast hardware comparison instructions that do not have
+    /// IEEE-compliant semantics.
+    ///
+    /// Implementations must be marked `#[inline]` as they will be called within
+    /// the timed benchmark loop.
+    fn fast_max(self, other: Self) -> Self;
+
     // We're also gonna need some float data & ops not exposed via std traits.
     //
     // Implementations of all of these functions must be marked `#[inline]` as
@@ -129,6 +151,28 @@ impl FloatLike for f32 {
             NonZeroUsize::new(2)
         }
     };
+
+    #[inline]
+    fn fast_min(self, other: Self) -> Self {
+        // This generates MINSS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        if self < other {
+            self
+        } else {
+            other
+        }
+    }
+
+    #[inline]
+    fn fast_max(self, other: Self) -> Self {
+        // This generates MAXSS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        if self > other {
+            self
+        } else {
+            other
+        }
+    }
 
     const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
 
@@ -177,6 +221,28 @@ impl FloatLike for f64 {
             NonZeroUsize::new(2)
         }
     };
+
+    #[inline]
+    fn fast_min(self, other: Self) -> Self {
+        // This generates MINSS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        if self < other {
+            self
+        } else {
+            other
+        }
+    }
+
+    #[inline]
+    fn fast_max(self, other: Self) -> Self {
+        // This generates MAXSS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        if self > other {
+            self
+        } else {
+            other
+        }
+    }
 
     const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
 
@@ -249,6 +315,20 @@ where
         }
     };
 
+    #[inline]
+    fn fast_min(self, other: Self) -> Self {
+        // This generates (V)MINPS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        self.simd_lt(other).select(self, other)
+    }
+
+    #[inline]
+    fn fast_max(self, other: Self) -> Self {
+        // This generates (V)MAXPS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        self.simd_gt(other).select(self, other)
+    }
+
     const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
 
     #[inline]
@@ -319,6 +399,20 @@ where
             NonZeroUsize::new(2)
         }
     };
+
+    #[inline]
+    fn fast_min(self, other: Self) -> Self {
+        // This generates (V)MINPS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        self.simd_lt(other).select(self, other)
+    }
+
+    #[inline]
+    fn fast_max(self, other: Self) -> Self {
+        // This generates (V)MAXPS on x86
+        // TODO: Check other CPUs and add more code paths as needed
+        self.simd_gt(other).select(self, other)
+    }
 
     const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
 

@@ -5,15 +5,15 @@ use common::{
 };
 use rand::Rng;
 
-/// Square root of positive numbers, followed by ADD/SUB
+/// Square root of positive numbers, followed by MAX
 ///
 /// Square roots of negative numbers may or may not be emulated in software.
 /// They are thus not a good candidate for CPU microbenchmarking.
 #[derive(Clone, Copy)]
-pub struct SqrtPositiveAddSub;
+pub struct SqrtPositiveMax;
 //
-impl<T: FloatLike> Operation<T> for SqrtPositiveAddSub {
-    const NAME: &str = "sqrt_positive_addsub";
+impl<T: FloatLike> Operation<T> for SqrtPositiveMax {
+    const NAME: &str = "sqrt_positive_max";
 
     // A square root must go to a temporary before use...
     fn aux_registers_regop(input_registers: usize) -> usize {
@@ -28,19 +28,19 @@ impl<T: FloatLike> Operation<T> for SqrtPositiveAddSub {
     const AUX_REGISTERS_MEMOP: usize = 1;
 
     fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
-        SqrtPositiveAddSubBenchmark {
+        SqrtPositiveMaxBenchmark {
             accumulators: [Default::default(); ILP],
         }
     }
 }
 
-/// [`Benchmark`] of [`SqrtPositiveAddSub`]
+/// [`Benchmark`] of [`SqrtPositiveMax`]
 #[derive(Clone, Copy)]
-struct SqrtPositiveAddSubBenchmark<T: FloatLike, const ILP: usize> {
+struct SqrtPositiveMaxBenchmark<T: FloatLike, const ILP: usize> {
     accumulators: [T; ILP],
 }
 //
-impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T, ILP> {
+impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmark<T, ILP> {
     type Float = T;
 
     fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize {
@@ -49,11 +49,8 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
 
     #[inline]
     fn begin_run(self, rng: impl Rng) -> Self {
-        // This is just a random additive walk of ~unity or subnormal step, so
-        // given a high enough starting point, an initially normal accumulator
-        // should stay in the normal range forever.
         Self {
-            accumulators: operations::additive_accumulators(rng),
+            accumulators: operations::normal_accumulators(rng),
         }
     }
 
@@ -62,20 +59,14 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        let low_iter = |acc, elem: T| acc + elem.sqrt();
-        let high_iter = |acc, elem: T| acc - elem.sqrt();
+        let iter = |acc: T, elem: T| acc.fast_max(elem.sqrt());
         if Inputs::IS_REUSED {
             // Need to hide reused register inputs, so that the compiler
             // doesn't abusively factor out the redundant square root
             // computations and reuse their result for all accumulators (in
             // fact it would even be allowed to reuse them for the entire
             // outer iters loop in run_benchmark).
-            operations::integrate_halves::<_, _, ILP, true>(
-                &mut self.accumulators,
-                inputs,
-                low_iter,
-                high_iter,
-            )
+            operations::integrate_full::<_, _, ILP, true>(&mut self.accumulators, inputs, iter)
         } else {
             // Memory inputs do not need to be hidden because each
             // accumulator gets its own input substream (preventing square
@@ -84,12 +75,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveAddSubBenchmark<T
             // for a whole arbitrarily large dynamically-sized batch of
             // input data.
             assert!(Inputs::NUM_REGISTER_INPUTS.is_none());
-            operations::integrate_halves::<_, _, ILP, false>(
-                &mut self.accumulators,
-                inputs,
-                low_iter,
-                high_iter,
-            )
+            operations::integrate_full::<_, _, ILP, false>(&mut self.accumulators, inputs, iter)
         };
     }
 

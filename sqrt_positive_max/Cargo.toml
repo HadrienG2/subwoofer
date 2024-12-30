@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of FMA with possibly subnormal inputs&output, followed by averaging"
+description = "Benchmark of SQRT followed by MAX"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "fma_full_average"
+name = "sqrt_positive_max"
 repository.workspace = true
 version.workspace = true
 

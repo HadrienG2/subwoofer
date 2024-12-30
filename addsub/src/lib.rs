@@ -57,7 +57,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
     {
         // No need for input hiding here, the compiler cannot do anything
         // dangerous with the knowledge that inputs are always the same.
-        operations::integrate_halves::<_, _, ILP, false>(
+        operations::integrate_halves(
             &mut self.accumulators,
             inputs,
             |acc, elem| acc + elem,

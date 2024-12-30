@@ -11,13 +11,13 @@
 [workspace]
 members = [
     "addsub",
-    "average",
     "common",
-    "fma_addend_average",
-    "fma_full_average",
-    "fma_multiplier_average",
-    "mul_average",
-    "sqrt_positive_addsub"
+    "fma_addend_min",
+    "fma_full_max_mul",
+    "fma_multiplier_min",
+    "max",
+    "mul_max",
+    "sqrt_positive_max"
 ]
 
 [workspace.package]
@@ -94,10 +94,11 @@ default = ["cargo_bench_support", "check"]
 # precisely tell how much the hardware operations are affected, whether the
 # impact is type-dependent, how it depends on subnormal freq, etc.
 check = [
-    "bench_addsub",               # ADD/SUB
-    "bench_sqrt_positive_addsub", # Includes SQRT
-    "bench_mul_average",          # Includes MUL
-    "bench_fma_full_average",     # Includes FMA
+    "bench_addsub",             # ADD/SUB
+    "bench_max",                # MAX is assumed to be same as MIN
+    "bench_mul_max",            # Includes subnormal MAX + MUL
+    "bench_sqrt_positive_max",  # Includes subnormal MAX + SQRT
+    "bench_fma_full_max_mul",   # Includes subnormal MAX + FMA -> normal MUL
 ]
 
 # Run enough benchmarks to check how good/bad the generated code is
@@ -129,24 +130,24 @@ cargo_bench_support = ["criterion/cargo_bench_support", "criterion/plotters", "c
 
 # Full set of supported microbenchmarks
 bench_all = [
-    "bench_addsub",                  # ADD/SUB with x%subnormal input, normal result
-    "bench_sqrt_positive_addsub",    # addsub + SQRT with x%subnormal input & result
-    "bench_average",                 # ADD x%subnormal -> MUL, subtract from following
-    "bench_mul_average",             # average + MUL with x%subnormal input & result
-    "bench_fma_multiplier_average",  # average + FMA with x%subnormal multiplier, normal addend & result
-    "bench_fma_addend_average",      # average + FMA with x%subnormal addend, normal multiplier & result
-    "bench_fma_full_average",        # average + FMA with x%subnormal multiplier and addend, x²%subnormal result
+    "bench_addsub",              # ADD/SUB with x%subnormal input, normal result
+    "bench_max",                 # MAX with x%subnormal input, normal result, assumed to be same as MIN
+    "bench_mul_max",             # MUL with x%subnormal input & result -> MAX with x%subnormal input, normal result
+    "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> MAX with x²%subnormal input, normal result
+    "bench_fma_multiplier_min",  # FMA with x%subnormal multiplier, normal addend & result -> normal MIN
+    "bench_fma_addend_min",      # FMA with x%subnormal addend, normal multiplier & result -> normal MIN
+    "bench_fma_full_max_mul",    # FMA with x%subnormal multiplier and addend, x²%subnormal result -> MAX with x²%subnormal input, normal result
 ]
 
 # Fine-grained control over benchmark selection. Lets you speed up compilation
 # when debugging a specific benchmark. Use with --no-default-features.
 bench_addsub = ["dep:addsub"]
-bench_average = ["dep:average"]
-bench_fma_addend_average = ["dep:fma_addend_average"]
-bench_fma_full_average = ["dep:fma_full_average"]
-bench_fma_multiplier_average = ["dep:fma_multiplier_average"]
-bench_mul_average = ["dep:mul_average"]
-bench_sqrt_positive_addsub = ["dep:sqrt_positive_addsub"]
+bench_fma_addend_min = ["dep:fma_addend_min"]
+bench_fma_full_max_mul = ["dep:fma_full_max_mul"]
+bench_fma_multiplier_min = ["dep:fma_multiplier_min"]
+bench_max = ["dep:max"]
+bench_mul_max = ["dep:mul_max"]
+bench_sqrt_positive_max = ["dep:sqrt_positive_max"]
 
 # By default, we only run benchmarks from data in the L1 cache, because that's
 # where we expect the maximal subnormal impact outside of perhaps the
@@ -214,16 +215,16 @@ subnormal_freq_resolution_1in128 = []
 
 [dependencies]
 addsub = { path = "./addsub", optional = true }
-average = { path = "./average", optional = true }
 common.workspace = true
 criterion.workspace = true
-fma_addend_average = { path = "./fma_addend_average", optional = true }
-fma_full_average = { path = "./fma_full_average", optional = true }
-fma_multiplier_average = { path = "./fma_multiplier_average", optional = true }
+fma_addend_min = { path = "./fma_addend_min", optional = true }
+fma_full_max_mul = { path = "./fma_full_max_mul", optional = true }
+fma_multiplier_min = { path = "./fma_multiplier_min", optional = true }
 hwlocality.workspace = true
-mul_average = { path = "./mul_average", optional = true }
+max = { path = "./max", optional = true }
+mul_max = { path = "./mul_max", optional = true }
 rand.workspace = true
-sqrt_positive_addsub = { path = "./sqrt_positive_addsub", optional = true }
+sqrt_positive_max = { path = "./sqrt_positive_max", optional = true }
 
 [lib]
 bench = false

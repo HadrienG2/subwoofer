@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of MUL followed by averaging"
+description = "Benchmark of FMA with a possibly subnormal multiplier, followed by MIN"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "mul_average"
+name = "fma_multiplier_min"
 repository.workspace = true
 version.workspace = true
 

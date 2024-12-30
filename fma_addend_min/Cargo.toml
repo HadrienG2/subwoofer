@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of averaging"
+description = "Benchmark of FMA with a possibly subnormal addend, followed by MIN"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "average"
+name = "fma_addend_min"
 repository.workspace = true
 version.workspace = true
 

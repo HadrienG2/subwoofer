@@ -32,19 +32,19 @@ pub(crate) struct TypeConfiguration<'criterion, 'memory_inputs, 'memory_input_na
 pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
     #[cfg(feature = "bench_addsub")]
     benchmark_operation::<_, addsub::AddSub>(&mut config);
-    #[cfg(feature = "bench_sqrt_positive_addsub")]
-    benchmark_operation::<_, sqrt_positive_addsub::SqrtPositiveAddSub>(&mut config);
-    #[cfg(feature = "bench_average")]
-    benchmark_operation::<_, average::Average>(&mut config);
-    #[cfg(feature = "bench_mul_average")]
-    benchmark_operation::<_, mul_average::MulAverage>(&mut config);
+    #[cfg(feature = "bench_max")]
+    benchmark_operation::<_, max::Max>(&mut config);
+    #[cfg(feature = "bench_mul_max")]
+    benchmark_operation::<_, mul_max::MulMax>(&mut config);
+    #[cfg(feature = "bench_sqrt_positive_max")]
+    benchmark_operation::<_, sqrt_positive_max::SqrtPositiveMax>(&mut config);
     if HAS_HARDWARE_FMA {
-        #[cfg(feature = "bench_fma_multiplier_average")]
-        benchmark_operation::<_, fma_multiplier_average::FmaMultiplierAverage>(&mut config);
-        #[cfg(feature = "bench_fma_addend_average")]
-        benchmark_operation::<_, fma_addend_average::FmaAddendAverage>(&mut config);
-        #[cfg(feature = "bench_fma_full_average")]
-        benchmark_operation::<_, fma_full_average::FmaFullAverage>(&mut config);
+        #[cfg(feature = "bench_fma_multiplier_min")]
+        benchmark_operation::<_, fma_multiplier_min::FmaMultiplierMin>(&mut config);
+        #[cfg(feature = "bench_fma_addend_min")]
+        benchmark_operation::<_, fma_addend_min::FmaAddendMin>(&mut config);
+        #[cfg(feature = "bench_fma_full_max_mul")]
+        benchmark_operation::<_, fma_full_max_mul::FmaFullMaxMul>(&mut config);
     }
 }
 

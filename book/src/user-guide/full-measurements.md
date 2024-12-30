@@ -35,16 +35,18 @@ Depending on the results of the basic check, this may be overkill and spend a
 large amount of time re-measuring information that you already know with
 unnecessary higher precision. To be more specific...
 
-- If you previously observed that the performance of the `addsub` and
-  `sqrt_positive_addsub` benchmarks is not affected by subnormal inputs, you do
-  not need to measure their performance more precisely.
-- If you previously observed that the performance of the `mul_average` benchmark
-  is not affected by subnormal inputs, you do not need to measure its
+- If you previously observed that the performance of the `addsub` is not
+  affected by subnormal inputs, then you do not need to measure its performance more
+  precisely.
+- If you conversely observed that `addsub` is the only operation that is
+  affected by subnormal inputs, then you do not need to measure the performance of
+  `max` more precisely.
+- If you previously observed that the performance of `fma_full_max` is not
+  affected by subnormal inputs, then you do not need to measure the performance
+  of `fma_multiplier_min`, `fma_addend_min` or `fma_full_max` more precisely.
+- If you previously observed that the performance of any `xyz_min/max` benchmark
+  is not affected by subnormal inputs, then you do not need to measure its
   performance more precisely.
-- If you previously observed that the performance of the `fma_full_average`
-  benchmark is not affected by subnormal inputs, you do not need to measure its
-  performance, and don't need to enable the related `fma_multipler_average` and
-  `fma_addend_average` benchmarks either.
 
 If you are in one of those cases, you may want to stop using the catch-all
 `measure` Cargo feature, and instead use finer-grained Cargo features that let
@@ -63,13 +65,13 @@ operations at compile time...
 # This is correct as of 2024-12-29, but beware that the set of Cargo features
 # covered by the "measure" option may evolve in future versions of Subwoofer
 cargo bench --no-default-features  \
-            --features=bench_addsub,bench_average,bench_mul_average,bench_sqrt_positive_addsub,cargo_bench_support,register_data_sources,simd
+            --features=bench_addsub,bench_max,bench_mul_max,bench_sqrt_positive_max,cargo_bench_support,register_data_sources,simd
 ```
 
 ...and, alternatively, how you would restrict it at runtime:
 
 ```bash
-cargo bench --features=measure -- '(addsub|average|mul_average|sqrt_positive_addsub)'
+cargo bench --features=measure -- '(addsub|max|mul_max|sqrt_positive_max)'
 ```
 
 
@@ -101,7 +103,7 @@ example of applying such an ILP configuration filter when benchmarking SQRT
 performance on an AMD Zen 2 CPU:
 
 ```bash
-cargo bench --features=measure -- '(addsub/ilp08|sqrt_positive_addsub/ilp04)|chained'
+cargo bench --features=measure -- '(max/ilp08|sqrt_positive_max/ilp04)|chained'
 ```
 
 
@@ -111,7 +113,7 @@ On many common CPUs, the performance of Subwoofer microbenchmarks that operate
 on data from the L1 data cache is mainly limited by floating-point arithmetic
 performance, rather than memory subsystem performance. However...
 
-- This not true of all benchmarks, for example `fma_full_average` on all-normal
+- This not true of all benchmarks, for example `fma_full_max` on all-normal
   inputs from the L1 cache is memory-bound on all CPUs that Subwoofer has been
   tested against so far.
 - It may not be true on all CPUs because the memory operations do consume some

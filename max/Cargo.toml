@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of SQRT followed by ADD/SUB"
+description = "Benchmark of max, results are assumed to apply to min as well"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "sqrt_positive_addsub"
+name = "max"
 repository.workspace = true
 version.workspace = true
 

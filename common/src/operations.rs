@@ -49,11 +49,11 @@ pub trait Benchmark: Copy {
     /// Start a new benchmark run
     ///
     /// This is the point where a benchmark should initialize its internal
-    /// state: accumulators, averaging targets, etc. Ideally, the state should
-    /// be fully regenerated from some suitable random distribution on each run
-    /// to avoid measurement bias linked to multiple runs with a the same
-    /// initial state. But if generating the state from an RNG is too expensive,
-    /// a reused state can be passed through [`pessimize::hide()`] instead.
+    /// state: accumulators, growth factors, etc. Ideally, the state should be
+    /// fully regenerated from some suitable random distribution on each run to
+    /// avoid measurement bias linked to multiple runs with a the same initial
+    /// state. But if generating the state from an RNG is too expensive, a
+    /// reused state can be passed through [`pessimize::hide()`] instead.
     ///
     /// You will typically want to initialize your accumulators to one of
     /// [`additive_accumulators()`] or [`normal_accumulators()`] here.
@@ -164,18 +164,43 @@ pub fn normal_accumulators<T: FloatLike, const ILP: usize>(mut rng: impl Rng) ->
 
 /// Benchmark skeleton that processes the full input homogeneously
 #[inline]
-pub fn integrate_full<T: FloatLike, Inputs: FloatSequence<Element = T>, const ILP: usize>(
+pub fn integrate_full<
+    T: FloatLike,
+    Inputs: FloatSequence<Element = T>,
+    const ILP: usize,
+    const HIDE_INPUTS: bool,
+>(
     accumulators: &mut [T; ILP],
-    inputs: &Inputs,
+    inputs: &mut Inputs,
     mut iter: impl Copy + FnMut(T, T) -> T,
 ) {
     let inputs_slice = inputs.as_ref();
     if Inputs::IS_REUSED {
-        for &elem in inputs_slice {
+        if HIDE_INPUTS {
+            // When we need to hide inputs, we flip the order of iteration over
+            // inputs and accumulators so that each set of inputs is fully
+            // processed before we switch accumulators.
+            //
+            // This minimizes the number of input optimization barriers, at the
+            // expense of making it harder for the CPU to extract ILP if the
+            // backend doesn't reorder instructions across the optimization
+            // barrier, because the CPU frontend must now dive through N
+            // mentions of an accumulator before reaching mentions of the next
+            // accumulator (we lose the "jam" part of unroll & jam).
             for acc in accumulators.iter_mut() {
-                *acc = iter(*acc, elem);
+                for &elem in inputs.as_ref() {
+                    *acc = iter(*acc, elem);
+                }
+                <Inputs as FloatSequence>::hide_inplace(inputs);
             }
             hide_accumulators(accumulators);
+        } else {
+            for &elem in inputs_slice {
+                for acc in accumulators.iter_mut() {
+                    *acc = iter(*acc, elem);
+                }
+                hide_accumulators(accumulators);
+            }
         }
     } else {
         let chunks = inputs_slice.chunks_exact(ILP);
@@ -194,52 +219,23 @@ pub fn integrate_full<T: FloatLike, Inputs: FloatSequence<Element = T>, const IL
 
 /// Benchmark skeleton that treats each half of the input differently
 #[inline]
-pub fn integrate_halves<
-    T: FloatLike,
-    Inputs: FloatSequence<Element = T>,
-    const ILP: usize,
-    const HIDE_INPUTS: bool,
->(
+pub fn integrate_halves<T: FloatLike, Inputs: FloatSequence<Element = T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
-    inputs: &mut Inputs,
+    inputs: &Inputs,
     mut low_iter: impl Copy + FnMut(T, T) -> T,
     mut high_iter: impl Copy + FnMut(T, T) -> T,
 ) {
     if Inputs::IS_REUSED {
-        if HIDE_INPUTS {
-            // When we need to hide inputs, we flip the order of iteration over
-            // inputs and accumulators so that each set of inputs is fully
-            // processed before we switch accumulators.
-            //
-            // This minimizes the number of input optimization barriers, at the
-            // expense of making it harder for the CPU to extract ILP if the
-            // backend doesn't reorder instructions across the optimization
-            // barrier, because the CPU frontend must now dive through N
-            // mentions of an accumulator before reaching mentions of the next
-            // accumulator (we lose the "jam" part of unroll & jam).
+        // Otherwise, we just do the same as usual, but with input reuse
+        let inputs_slice = inputs.as_ref();
+        let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
+        assert_eq!(low_inputs.len(), high_inputs.len());
+        for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
             for acc in accumulators.iter_mut() {
-                let inputs_slice = inputs.as_ref();
-                let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
-                assert_eq!(low_inputs.len(), high_inputs.len());
-                for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
-                    *acc = low_iter(*acc, low_elem);
-                    *acc = high_iter(*acc, high_elem);
-                }
-                <Inputs as FloatSequence>::hide_inplace(inputs);
+                *acc = low_iter(*acc, low_elem);
+                *acc = high_iter(*acc, high_elem);
             }
             hide_accumulators(accumulators);
-        } else {
-            // Otherwise, we just do the same as usual, but with input reuse
-            let inputs_slice = inputs.as_ref();
-            let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
-            assert_eq!(low_inputs.len(), high_inputs.len());
-            for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
-                for acc in accumulators.iter_mut() {
-                    *acc = low_iter(*acc, low_elem);
-                    *acc = high_iter(*acc, high_elem);
-                }
-                hide_accumulators(accumulators);
-            }
         }
     } else {
         let inputs_slice = inputs.as_ref();
