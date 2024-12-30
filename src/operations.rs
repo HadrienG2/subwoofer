@@ -38,6 +38,10 @@ pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
     benchmark_operation::<_, mul_max::MulMax>(&mut config);
     #[cfg(feature = "bench_sqrt_positive_max")]
     benchmark_operation::<_, sqrt_positive_max::SqrtPositiveMax>(&mut config);
+    #[cfg(feature = "bench_div_numerator_max")]
+    benchmark_operation::<_, div_numerator_max::DivNumeratorMax>(&mut config);
+    #[cfg(feature = "bench_div_denominator_min")]
+    benchmark_operation::<_, div_denominator_min::DivDenominatorMin>(&mut config);
     if HAS_HARDWARE_FMA {
         #[cfg(feature = "bench_fma_multiplier_min")]
         benchmark_operation::<_, fma_multiplier_min::FmaMultiplierMin>(&mut config);

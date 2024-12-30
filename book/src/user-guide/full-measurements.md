@@ -41,12 +41,14 @@ unnecessary higher precision. To be more specific...
 - If you conversely observed that `addsub` is the only operation that is
   affected by subnormal inputs, then you do not need to measure the performance of
   `max` more precisely.
-- If you previously observed that the performance of `fma_full_max` is not
+- If you previously observed that the performance of `fma_full_max_mul` is not
   affected by subnormal inputs, then you do not need to measure the performance
-  of `fma_multiplier_min`, `fma_addend_min` or `fma_full_max` more precisely.
-- If you previously observed that the performance of any `xyz_min/max` benchmark
-  is not affected by subnormal inputs, then you do not need to measure its
-  performance more precisely.
+  of `fma_multiplier_min`, `fma_addend_min` or `fma_full_max_mul` more
+  precisely.
+- If you previously observed that the performance of any other `xyz_min/max`
+  benchmark is not affected by subnormal inputs, then you normally do not need
+  to measure its performance more precisely. There is one exception, which is
+  that you need `mul_max` to interprete `fma_full_max_mul`.
 
 If you are in one of those cases, you may want to stop using the catch-all
 `measure` Cargo feature, and instead use finer-grained Cargo features that let

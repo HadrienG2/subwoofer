@@ -1,0 +1,18 @@
+[package]
+authors.workspace = true
+autobenches = false
+categories.workspace = true
+description = "Benchmark of DIV with a possibly subnormal numerator, followed by MAX"
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "div_numerator_max"
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+common.workspace = true
+rand.workspace = true
+
+[lib]
+bench = false

@@ -224,6 +224,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "div_denominator_min"
+version = "1.0.0"
+dependencies = [
+ "common",
+ "rand",
+]
+
+[[package]]
+name = "div_numerator_max"
+version = "1.0.0"
+dependencies = [
+ "common",
+ "rand",
+]
+
+[[package]]
 name = "either"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,6 +674,8 @@ dependencies = [
  "addsub",
  "common",
  "criterion",
+ "div_denominator_min",
+ "div_numerator_max",
  "fma_addend_min",
  "fma_full_max_mul",
  "fma_multiplier_min",

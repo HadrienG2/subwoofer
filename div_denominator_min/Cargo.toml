@@ -1,0 +1,18 @@
+[package]
+authors.workspace = true
+autobenches = false
+categories.workspace = true
+description = "Benchmark of DIV with a possibly subnormal denominator, followed by MIN"
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "div_denominator_min"
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+common.workspace = true
+rand.workspace = true
+
+[lib]
+bench = false
