@@ -171,6 +171,7 @@ pub fn integrate_full<
     const HIDE_INPUTS: bool,
 >(
     accumulators: &mut [T; ILP],
+    mut hide_accumulators: impl FnMut(&mut [T; ILP]),
     inputs: &mut Inputs,
     mut iter: impl Copy + FnMut(T, T) -> T,
 ) {
@@ -235,7 +236,7 @@ pub fn integrate_halves<T: FloatLike, Inputs: FloatSequence<Element = T>, const 
                 *acc = low_iter(*acc, low_elem);
                 *acc = high_iter(*acc, high_elem);
             }
-            hide_accumulators(accumulators);
+            hide_accumulators::<_, ILP, true>(accumulators);
         }
     } else {
         let inputs_slice = inputs.as_ref();
@@ -253,7 +254,7 @@ pub fn integrate_halves<T: FloatLike, Inputs: FloatSequence<Element = T>, const 
                 *acc = low_iter(*acc, low_elem);
                 *acc = high_iter(*acc, high_elem);
             }
-            hide_accumulators(accumulators);
+            hide_accumulators::<_, ILP, true>(accumulators);
         }
         for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
             *acc = low_iter(*acc, low_elem);
@@ -264,37 +265,45 @@ pub fn integrate_halves<T: FloatLike, Inputs: FloatSequence<Element = T>, const 
     }
 }
 
-/// Minimal optimization barrier needed to avoid accumulator autovectorization
+/// Minimal optimization barrier to avoid accumulator autovectorization
 ///
-/// If we accumulate data naively, LLVM will figure out that we're aggregating
-/// arrays of inputs into identically sized arrays of accumulators and helpfully
-/// autovectorize the accumulation. We do not want this optimization here
-/// because it gets in the way of us separately studying the hardware overhead
-/// of scalar and SIMD operations.
+/// If we accumulate data naively, LLVM can figure out that we're aggregating
+/// arrays of inputs into identically sized arrays of accumulators, and
+/// helpfully autovectorize the accumulation. Sadly, we do not want this
+/// optimization here because it gets in the way of us separately studying the
+/// hardware overhead of scalar and SIMD operations.
 ///
-/// Therefore, we send accumulators to opaque inline ASM via `pessimize::hide()`
-/// after ~each accumulation iteration so that LLVM is forced to run the
-/// computations on the actual specified data type, or more precisely decides to
-/// do so because the overhead of assembling data in wide vectors then
-/// re-splitting it into narrow vectors is higher than the performance gain of
-/// autovectorizing.
+/// To prevent this, we send accumulators through opaque inline ASM via
+/// [`pessimize::hide()`] after ~each accumulation iteration. This means that in
+/// order to autovectorize, LLVM must now group data in wide vectors, then split
+/// it back into narrow vctors, on each iteration. For any simple computation,
+/// that's a strong enough deterrent to foil its autovectorization plans.
 ///
-/// Unfortunately, such frequent optimization barriers come with side effects
-/// like useless register-register moves and a matching increase in FP register
-/// pressure. To reduce and ideally fully eliminate the impact, it is better to
-/// send only a subset of the accumulators through the optimization barrier, and
-/// to refrain from using it altogether in situations where autovectorization is
-/// not known to be possible. This is what this function does.
+/// Unfortunately, these optimization barriers also negatively affects code
+/// generation. For example, they can cause unnecessary register-register copies
+/// and thus increase CPU register pressure above the optimum for a certain
+/// numerical computation. And they can cause unrelated data that is resident in
+/// CPU registers to spill to memory and be loaded back into registers. To
+/// minimize these side-effects, you want as few optimization barriers as
+/// possible, targeting as little data as possible.
 ///
-/// For better codegen, you can also abandon the convenience of the `-C
-/// target-cpu=native` configuration that is enabled in the `.cargo/config.toml`
-/// file, and instead separately benchmark each type in a dedicated
-/// configuration that does not enable unneeded wider vector instructions. On
-/// x86_64, that would be e.g. `-C target_feature=+avx` for f32x08 and f64x04,
-/// and nothing for SSE and scalar types (it is not legal to disable SSE for
-/// better scalar codegen on x86_64).
+/// In MINIMAL mode, this function function tries to apply the minimum viable
+/// accumulator-hiding barrier for autovectorization prevention in easy cases.
+/// It does not work for all computations, but when it works, it can lead to
+/// lower overhead than putting a barrier on all accumulators. If it doesn't
+/// work, just set MINIMAL to false and we'll hide all the accumulators if there is
+/// any risk of autovectorization.
+///
+/// To improve codegen further, you can also abandon the convenience of `-C
+/// target-cpu=native` and instead separately benchmark each type in a dedicated
+/// configuration that does not enable unnecessary wide vector instruction sets.
+/// For example, on  x86_64, you would want `RUSTFLAGS='-C
+/// target_feature=+avx,+fma'` for f32x08 and f64x04, and `RUSTFLAGS=''` for SSE
+/// and scalar types (it's not legal to disable SSE on x86_64).
 #[inline]
-pub fn hide_accumulators<T: FloatLike, const ILP: usize>(accumulators: &mut [T; ILP]) {
+pub fn hide_accumulators<T: FloatLike, const ILP: usize, const MINIMAL: bool>(
+    accumulators: &mut [T; ILP],
+) {
     // No need for pessimize::hide() optimization barriers if this accumulation
     // cannot be autovectorized because e.g. we are operating at the maximum
     // hardware-supported SIMD vector width.
@@ -304,19 +313,29 @@ pub fn hide_accumulators<T: FloatLike, const ILP: usize>(accumulators: &mut [T; 
 
     // Otherwise apply pessimize::hide() to a set of accumulators which is large
     // enough that there aren't enough remaining non-hidden accumulators left
-    // for the compiler to perform autovectorization.
-    //
-    // If rustc/LLVM ever becomes crazy enough to autovectorize with masked SIMD
-    // operations, then this -1 may need to become a /2 or worse, depending on
-    // how efficient the compiler estimates that masked SIMD operations are on
-    // the CPU target that the benchmark will run on. It's debatable whether
-    // this is best handled here or in the definition of MIN_VECTORIZABLE_ILP.
-    let max_elided_barriers = min_vector_ilp.get() - 1;
+    // for the compiler to perform reasonable autovectorization.
+    let max_elided_barriers = if MINIMAL { min_vector_ilp.get() - 1 } else { 0 };
     let min_hidden_accs = ILP.saturating_sub(max_elided_barriers);
     for acc in accumulators.iter_mut().take(min_hidden_accs) {
         let old_acc = *acc;
         let new_acc = pessimize::hide::<T>(old_acc);
         *acc = new_acc;
+    }
+}
+
+/// Single-accumulator autovectorization barrier
+///
+/// Use in situations where a coarse-grained [`hide_accumulators()`] barrier
+/// that applies to the full set of accumulators is not enough to reliably
+/// prevent autovectorization. This typically happens inside of sub-expressions
+/// of a computation that LLVM considers complex enough to justify internal
+/// autovectorization.
+#[inline]
+pub fn hide_single_accumulator<T: FloatLike>(accumulator: T) -> T {
+    if T::MIN_VECTORIZABLE_ILP.is_some() {
+        pessimize::hide::<T>(accumulator)
+    } else {
+        accumulator
     }
 }
 

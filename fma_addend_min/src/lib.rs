@@ -66,13 +66,15 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaAddendMinBenchmark<T, ILP>
         // knowledge of input reuse here
         operations::integrate_full::<_, _, ILP, false>(
             &mut self.accumulators,
+            operations::hide_accumulators::<_, ILP, false>,
             inputs,
             move |acc, elem| {
-                // Given that acc > 0 and growth >= 1.0, acc * growth >= acc.
-                // Because elem > 0, if follows that acc*growth+elem > acc. So acc
-                // cannot shrink, and its growth is also bounded by MIN. Hence it
-                // will forever remain in its initial [0.5; 2.0[ range.
-                acc.mul_add(growth, elem).fast_min(T::splat(2.0))
+                // Given that acc > 0 and growth >= 1, acc * growth >= acc.
+                // Because elem > 0, if follows that acc*growth+elem > acc. So
+                // acc cannot shrink, and its growth is also bounded by MIN.
+                // Hence it will forever remain in its initial [0.5; 2[ range.
+                operations::hide_single_accumulator(acc.mul_add(growth, elem))
+                    .fast_min(T::splat(2.0))
             },
         );
     }

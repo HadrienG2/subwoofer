@@ -57,13 +57,14 @@ impl<T: FloatLike, const ILP: usize> Benchmark for MulMaxBenchmark<T, ILP> {
         // knowledge of input reuse here
         operations::integrate_full::<_, _, ILP, false>(
             &mut self.accumulators,
+            operations::hide_accumulators::<_, ILP, false>,
             inputs,
             move |acc, elem| {
                 // If elem is subnormal, the max takes us back to normal range,
                 // otherwise this is a truncated multiplicative random walk that
                 // cannot go lower than 0.5. In that case we can only use half of
                 // the available exponent range but that's still plenty enough.
-                (acc * elem).fast_max(T::splat(0.5))
+                operations::hide_single_accumulator(acc * elem).fast_max(T::splat(0.5))
             },
         );
     }

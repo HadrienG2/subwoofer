@@ -66,7 +66,8 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullMaxMulBenchmark<T, ILP
             //   in range [0; 1*2+2[ = [0; 4[.
             // - By applying the maximum, we get back to normal range [2; 4[
             // - By dividing by 4, we get back to initial acc range [0.5; 1[
-            acc.mul_add(factor, addend).fast_max(T::splat(2.0)) * T::splat(0.25)
+            operations::hide_single_accumulator(acc.mul_add(factor, addend)).fast_max(T::splat(2.0))
+                * T::splat(0.25)
         };
         let inputs_slice = inputs.as_ref();
         let (factor_inputs, addend_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
@@ -76,7 +77,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullMaxMulBenchmark<T, ILP
                 for acc in self.accumulators.iter_mut() {
                     *acc = iter(*acc, factor, addend);
                 }
-                operations::hide_accumulators(&mut self.accumulators);
+                operations::hide_accumulators::<_, ILP, true>(&mut self.accumulators);
             }
         } else {
             let factor_chunks = factor_inputs.chunks_exact(ILP);
@@ -91,7 +92,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullMaxMulBenchmark<T, ILP
                 {
                     *acc = iter(*acc, factor, addend);
                 }
-                operations::hide_accumulators(&mut self.accumulators);
+                operations::hide_accumulators::<_, ILP, false>(&mut self.accumulators);
             }
             for ((&factor, &addend), acc) in factor_remainder
                 .iter()

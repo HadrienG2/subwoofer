@@ -86,9 +86,9 @@ pub trait FloatLike:
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize>;
 
     /// Element-wise (for SIMD) minimum function that is only IEEE-754 compliant
-    /// for normal, subnormal, +0.0 and +/-inf.
+    /// for normal, subnormal, +0 and +/-inf.
     ///
-    /// If one of the inputs is a NaN or -0.0, the result is unspecified. This
+    /// If one of the inputs is a NaN or -0, the result is unspecified. This
     /// allows the use of fast hardware comparison instructions that do not have
     /// IEEE-compliant semantics.
     ///
@@ -97,9 +97,9 @@ pub trait FloatLike:
     fn fast_min(self, other: Self) -> Self;
 
     /// Element-wise (for SIMD) maximum function that is only IEEE-754 compliant
-    /// for normal, subnormal, +0.0 and +/-inf.
+    /// for normal, subnormal, +0 and +/-inf.
     ///
-    /// If one of the inputs is a NaN or -0.0, the result is unspecified. This
+    /// If one of the inputs is a NaN or -0, the result is unspecified. This
     /// allows the use of fast hardware comparison instructions that do not have
     /// IEEE-compliant semantics.
     ///
@@ -155,7 +155,7 @@ impl FloatLike for f32 {
     #[inline]
     fn fast_min(self, other: Self) -> Self {
         // This generates MINSS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // TODO: Check other CPUs, add more code paths as needed
         if self < other {
             self
         } else {
@@ -166,7 +166,7 @@ impl FloatLike for f32 {
     #[inline]
     fn fast_max(self, other: Self) -> Self {
         // This generates MAXSS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // TODO: Check other CPUs, add more code paths as needed
         if self > other {
             self
         } else {
@@ -224,8 +224,8 @@ impl FloatLike for f64 {
 
     #[inline]
     fn fast_min(self, other: Self) -> Self {
-        // This generates MINSS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // This generates MINSD on x86
+        // TODO: Check other CPUs, add more code paths as needed
         if self < other {
             self
         } else {
@@ -235,8 +235,8 @@ impl FloatLike for f64 {
 
     #[inline]
     fn fast_max(self, other: Self) -> Self {
-        // This generates MAXSS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // This generates MAXSD on x86
+        // TODO: Check other CPUs, add more code paths as needed
         if self > other {
             self
         } else {
@@ -318,14 +318,14 @@ where
     #[inline]
     fn fast_min(self, other: Self) -> Self {
         // This generates (V)MINPS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // TODO: Check other CPUs, add more code paths as needed
         self.simd_lt(other).select(self, other)
     }
 
     #[inline]
     fn fast_max(self, other: Self) -> Self {
         // This generates (V)MAXPS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // TODO: Check other CPUs, add more code paths as needed
         self.simd_gt(other).select(self, other)
     }
 
@@ -402,15 +402,15 @@ where
 
     #[inline]
     fn fast_min(self, other: Self) -> Self {
-        // This generates (V)MINPS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // This generates (V)MINPD on x86
+        // TODO: Check other CPUs, add more code paths as needed
         self.simd_lt(other).select(self, other)
     }
 
     #[inline]
     fn fast_max(self, other: Self) -> Self {
-        // This generates (V)MAXPS on x86
-        // TODO: Check other CPUs and add more code paths as needed
+        // This generates (V)MAXPD on x86
+        // TODO: Check other CPUs, add more code paths as needed
         self.simd_gt(other).select(self, other)
     }
 

@@ -13,7 +13,7 @@ pub struct DivDenominatorMin;
 impl<T: FloatLike> Operation<T> for DivDenominatorMin {
     const NAME: &str = "div_denominator_min";
 
-    // One register for the 0.5 lower bound
+    // One register for the 2.0 upper bound
     fn aux_registers_regop(_input_registers: usize) -> usize {
         1
     }
@@ -57,13 +57,15 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<T,
         // knowledge of input reuse here
         operations::integrate_full::<_, _, ILP, false>(
             &mut self.accumulators,
+            operations::hide_accumulators::<_, ILP, false>,
             inputs,
             move |acc, elem| {
-                // If elem is subnormal, the min takes us back to normal range,
-                // otherwise this is a truncated multiplicative random walk that
-                // cannot go higher than 2.0. In that case we can only use half
-                // of the available exponent range but that's plenty enough.
-                (acc / elem).fast_min(T::splat(2.0))
+                // If elem is subnormal, the result is inifite, but the min
+                // takes us back to normal range. Those events aside, this is a
+                // truncated multiplicative random walk that cannot go higher
+                // than 2.0. This means we can only use half of the available
+                // exponent range, but for out purposes that's enough.
+                operations::hide_single_accumulator(acc / elem).fast_min(T::splat(2.0))
             },
         );
     }

@@ -67,6 +67,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for MaxBenchmark<T, ILP> {
         // knowledge of input reuse here
         operations::integrate_full::<_, _, ILP, false>(
             &mut self.accumulators,
+            operations::hide_accumulators::<_, ILP, true>,
             inputs,
             |acc, elem| acc.fast_max(elem),
         );

@@ -1,9 +1,11 @@
 use common::{
+    arch::HAS_MEMORY_OPERANDS,
     floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
     operations::{self, Benchmark, Operation},
 };
 use rand::Rng;
+use target_features::Architecture;
 
 /// DIV with a possibly subnormal numerator, followed by MAX
 #[derive(Clone, Copy)]
@@ -14,6 +16,7 @@ impl<T: FloatLike> Operation<T> for DivNumeratorMax {
 
     // One register for the 0.5 lower bound + a temporary on all CPU ISAs where
     // DIV cannot emit its output to the register that holds the denominator
+    // TODO: Make sure only x86 got this silly idea
     fn aux_registers_regop(_input_registers: usize) -> usize {
         1 + cfg!(all(
             any(target_arch = "x86", target_arch = "x86_64"),
@@ -21,9 +24,17 @@ impl<T: FloatLike> Operation<T> for DivNumeratorMax {
         )) as usize
     }
 
-    // I do not currently know of any architecture where we can use a memory
-    // operand for a division's numerator, so we always need a temporary
-    const AUX_REGISTERS_MEMOP: usize = 2;
+    // Still need the lower bound, the question is, can we use a memory input
+    // for the numerator of a division?
+    const AUX_REGISTERS_MEMOP: usize = const {
+        let target = target_features::CURRENT_TARGET;
+        match target.architecture() {
+            // On current x86 at least, we cannot
+            Architecture::X86 => 2,
+            // TODO: Check for other architectures
+            _ => 1 + (!HAS_MEMORY_OPERANDS) as usize,
+        }
+    };
 
     fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
         DivNumeratorMaxBenchmark {
@@ -61,13 +72,14 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<T, I
         // knowledge of input reuse here
         operations::integrate_full::<_, _, ILP, false>(
             &mut self.accumulators,
+            operations::hide_accumulators::<_, ILP, false>,
             inputs,
             move |acc, elem| {
                 // If elem is subnormal, the max takes us back to normal range,
                 // otherwise this is a truncated multiplicative random walk that
-                // cannot go lower than 0.5. In that case we can only use half of
-                // the available exponent range but that's still plenty enough.
-                (elem / acc).fast_max(T::splat(0.5))
+                // cannot go lower than 0.5. In that case we can only use half
+                // of the available exponent range but that's enough.
+                operations::hide_single_accumulator(elem / acc).fast_max(T::splat(0.5))
             },
         );
     }

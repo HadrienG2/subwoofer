@@ -59,14 +59,20 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmark<T, I
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        let iter = |acc: T, elem: T| acc.fast_max(elem.sqrt());
+        let hide_accumulators = operations::hide_accumulators::<_, ILP, false>;
+        let iter = |acc: T, elem: T| acc.fast_max(operations::hide_single_accumulator(elem.sqrt()));
         if Inputs::IS_REUSED {
             // Need to hide reused register inputs, so that the compiler
             // doesn't abusively factor out the redundant square root
             // computations and reuse their result for all accumulators (in
             // fact it would even be allowed to reuse them for the entire
             // outer iters loop in run_benchmark).
-            operations::integrate_full::<_, _, ILP, true>(&mut self.accumulators, inputs, iter)
+            operations::integrate_full::<_, _, ILP, true>(
+                &mut self.accumulators,
+                hide_accumulators,
+                inputs,
+                iter,
+            )
         } else {
             // Memory inputs do not need to be hidden because each
             // accumulator gets its own input substream (preventing square
@@ -75,7 +81,12 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmark<T, I
             // for a whole arbitrarily large dynamically-sized batch of
             // input data.
             assert!(Inputs::NUM_REGISTER_INPUTS.is_none());
-            operations::integrate_full::<_, _, ILP, false>(&mut self.accumulators, inputs, iter)
+            operations::integrate_full::<_, _, ILP, false>(
+                &mut self.accumulators,
+                hide_accumulators,
+                inputs,
+                iter,
+            )
         };
     }
 

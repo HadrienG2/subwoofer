@@ -237,6 +237,7 @@ version = "1.0.0"
 dependencies = [
  "common",
  "rand",
+ "target-features",
 ]
 
 [[package]]
