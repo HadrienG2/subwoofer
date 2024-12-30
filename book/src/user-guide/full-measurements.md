@@ -31,24 +31,24 @@ of this chapter, we will be discuss how this is done.
 ## Arithmetic operation set
 
 By default, the `measure` configuration enables all supported microbenchmarks.
-Depending on the results of the basic check, this may be overkill and spend a
-large amount of time re-measuring information that you already know with
-unnecessary higher precision. To be more specific...
+Depending on the results of the previous [basic check](basic-check.md), this may
+be overkill and spend a large amount of time re-measuring information that you
+already know with unnecessary extra precision.
 
-- If you previously observed that the performance of the `addsub` is not
-  affected by subnormal inputs, then you do not need to measure its performance more
-  precisely.
-- If you conversely observed that `addsub` is the only operation that is
-  affected by subnormal inputs, then you do not need to measure the performance of
-  `max` more precisely.
-- If you previously observed that the performance of `fma_full_max_mul` is not
-  affected by subnormal inputs, then you do not need to measure the performance
-  of `fma_multiplier_min`, `fma_addend_min` or `fma_full_max_mul` more
-  precisely.
-- If you previously observed that the performance of any other `xyz_min/max`
-  benchmark is not affected by subnormal inputs, then you normally do not need
-  to measure its performance more precisely. There is one exception, which is
-  that you need `mul_max` to interprete `fma_full_max_mul`.
+Here's how to decide which benchmarks you can disable:
+
+- If one of the `addsub`, `sqrt_positive_max`, `div_denominator_min` and
+  `div_numerator_max` benchmarks was not affected by subnormals during the basic
+  check, then you can disable it during the full measurement.
+- If the `fma_full_max_mul` benchmark was not affected by subnormals during the
+  basic check, then you can disable the `fma_addend_min`, `fma_multiplier_min`
+  and `fma_full_max_mul` benchmarks during the full measurement.
+- If **none** of the `mul_max` and `fma_full_max_mul` benchmarks were affected
+  by subnormals, you can disable the `mul_max` benchmark during the full
+  measurement.
+- Finally, you cannot disable the `max` benchmark during the full measurement
+  unless **all** benchmarks except for `addsub` were **unaffected** by
+  subnormals.
 
 If you are in one of those cases, you may want to stop using the catch-all
 `measure` Cargo feature, and instead use finer-grained Cargo features that let
@@ -59,21 +59,21 @@ which set of Cargo features you should enable in this case. As an easier but
 slower alternative, you may also disable those benchmarks at runtime using
 `cargo bench`'s regex-based benchmark name filter.
 
-For example, on AMD Zen 2/3 CPUs where only the performance of `SQRT` and `MUL`
-is affected by subnormals, this is how you would restrict the set of benchmarked
-operations at compile time...
+For example, on AMD Zen 2/3 CPUs where only the performance of `MUL`, `SQRT` and
+`DIV` are affected by subnormals, you could restrict the set of benchmarks at
+compile time like this...
 
 ```bash
 # This is correct as of 2024-12-29, but beware that the set of Cargo features
 # covered by the "measure" option may evolve in future versions of Subwoofer
 cargo bench --no-default-features  \
-            --features=bench_addsub,bench_max,bench_mul_max,bench_sqrt_positive_max,cargo_bench_support,register_data_sources,simd
+            --features=bench_max,bench_mul_max,bench_sqrt_positive_max,bench_div_numerator_max,bench_div_denominator_min,cargo_bench_support,register_data_sources,simd
 ```
 
-...and, alternatively, how you would restrict it at runtime:
+...or, alternatively, restrict it at runtime like this:
 
 ```bash
-cargo bench --features=measure -- '(addsub|max|mul_max|sqrt_positive_max)'
+cargo bench --features=measure -- '(max|mul_max|sqrt_positive_max|div_numerator_max|div_denominator_min)'
 ```
 
 
@@ -127,7 +127,7 @@ For this reason, the `register_data_sources` Cargo feature, which is part of the
 broader `measure` feature, enables alternate versions of the microbenchmarks
 that run against inputs from CPU registers instead of inputs from the L1 cache.
 This configuration avoids memory subsystem bottlenecks entirely, at the expense
-of having some other drawbacks:
+of having other drawbacks:
 
 - Because the input dataset is tiny, a sufficiently smart CPU backend could
   apply optimizations to its internal subnormal number processing logic that do
@@ -150,9 +150,9 @@ respectable grain of salt:
   comes out of them as suspicious by default, unless you have the time to
   carefully analyze the generated code and runtime CPU microarchitecture
   behavior to prove this default hypothesis wrong.
-- When in doubt, your default assumption should be that benchmarks that operate
-  from the L1 cache are "more right" than those that operate from CPU registers,
-  until proven otherwise.
+- In general, if you have any doubt, your default assumption should be that
+  benchmarks that operate from the L1 cache are "more right" than those that
+  operate from CPU registers, until proven otherwise.
 
 If you want to disable register inputs to speed up the benchmark's build and
 execution, then the most efficient way will be to refrain from enabling

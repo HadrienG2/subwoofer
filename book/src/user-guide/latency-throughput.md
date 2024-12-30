@@ -17,8 +17,8 @@ merit. Instead, two standard figures of merit are normally used:
   are met (execution ports are available, inputs are ready, etc). It is normally
   given in instructions per second or per CPU clock cycle. Sometimes, people
   also provide reciprocal throughput in average CPU clock cycles per
-  instruction, which is more tracherous to the reader because it looks a lot
-  like a latency.
+  instruction, which is more tracherous to the reader because it looks like a
+  latency.
 
 Depending on the "shape" of its machine code, a certain numerical computation
 will be more limited by one of these two performance limits:

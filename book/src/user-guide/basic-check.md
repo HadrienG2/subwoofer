@@ -57,9 +57,9 @@ Here is what you should pay attention at this stage:
   the number of subnormal share data points low, which will greatly speed up
   benchmark execution.
 
-[^1]: You should read the results analysis guide before disabling operation
-      benchmarks because many of the operations that Subwoofer measure are not
-      elementary hardware arithmetic operations. This means that you need to
-      know the performance of some measured operations, even if they are not
-      affected by subnormals, in order to estimate the performance of other
-      hardware operations that are affected by subnormals.
+[^1]: You should read the next chapter before disabling operation benchmarks
+      because many of the operations that Subwoofer measure are not elementary
+      hardware arithmetic operations. This means that you need to know the
+      performance of some measured operations, even if they are not affected by
+      subnormals, in order to estimate the performance of other hardware
+      operations that are affected by subnormals.

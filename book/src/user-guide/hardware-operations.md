@@ -9,7 +9,7 @@ configurations. This is not easy as it seems because...
   chains made of many copies of the same operation, where each operation takes
   the output of the previous operation as one of its inputs.
 - To enforce a share of subnormal inputs othen than 100%, we must ensure that
-  the output of operation N-1, which serves as one of the inputs of operation N,
+  the output of operation N, which serves as one of the inputs of operation N+1,
   is a normal number, while other inputs come from a pseudorandom input data
   stream of well-controlled characteristics.
 - Many IEEE-754 arithmetic operations produce a non-normal number when fed with

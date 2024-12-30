@@ -29,7 +29,7 @@ impl<T: FloatLike> Operation<T> for DivNumeratorMax {
     const AUX_REGISTERS_MEMOP: usize = const {
         let target = target_features::CURRENT_TARGET;
         match target.architecture() {
-            // On current x86 at least, we cannot
+            // As of AVX-512 at least, x86 will not allow that
             Architecture::X86 => 2,
             // TODO: Check for other architectures
             _ => 1 + (!HAS_MEMORY_OPERANDS) as usize,

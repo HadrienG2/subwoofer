@@ -6,9 +6,9 @@ of microbenchmarks that lets you review how [subnormal
 numbers](https://en.wikipedia.org/wiki/Subnormal_number) affect the performance
 of floating-point arithmetic operations on your CPU's microarchitecture.
 
-Currently supported arithmetic includes ADD, SUB, MUL, DIV, FMA, SQRT and
-MIN/MAX of positive numbers, mainly with subnormal inputs and sometimes with
-subnormal outputs too.
+Currently supported arithmetic includes ADD/SUB, MIN/MAX, MUL, FMA, DIV and SQRT
+of positive numbers, mainly with subnormal inputs and sometimes with subnormal
+outputs too.
 
 As the time of writing, this benchmark has only been rigorously checked for
 correctness on x86_64. But it has been designed with due consideration for other

@@ -11,11 +11,11 @@ following usual CPU microbenchmarking recommendations.
 
 These recommendations are listed below, in rough order of decreasing importance.
 
-1. Before running any benchmark, you should shut down any background OS process
+1. Before running a benchmark, you should shut down any background OS process
    that is not required by the benchmark, and keep background processes to a
    minimum until the benchmark is done performing timing measurements.
    * If you do not do this, even intermittent background tasks may keep other
-     CPU cores busy, which will lead the CPU core on which the benchmark is
+     CPU cores active, which can lead the CPU core on which the benchmark is
      running to downclock in unpredictable ways under a normal CPU frequency
      scaling policy. See below for more info on how you can turn that off, and
      why you may not want do do so.
@@ -30,8 +30,8 @@ These recommendations are listed below, in rough order of decreasing importance.
    electrical outlet.
    * The CPU performance of some laptops has been observed to fluctuate in
      highly unpredictable ways when operating on battery power. The exact cause
-     for this phenomenon is not fully understood, but it may be related to
-     maximal current draw limitations of the underlying laptop battery.
+     for this phenomenon is not fully understood, but it could be related to
+     maximal current draw limitations of the underlying laptop batteries.
 3. OS and vendor performance/powersaving tunables should be set up for maximal
    performance.
    * If you do not do this, your benchmark results will exhibit some dependence
@@ -49,8 +49,7 @@ These recommendations are listed below, in rough order of decreasing importance.
      [`pstate-frequency`](https://github.com/pyamsoft/pstate-frequency). For
      other CPUs, see [this page of the Arch
      wiki](https://wiki.archlinux.org/title/CPU_frequency_scaling#Scaling_drivers).
-   * Note that setting up your CPU like this is a nontrivial tradeoff that you
-     should consider carefully:
+   * Note that setting up your CPU like this is a nontrivial tradeoff:
      - As a major benefit, it makes your benchmark output more accurate and
        reproducible.
      - As a minor benefit, it lets you convert criterion's time-based
