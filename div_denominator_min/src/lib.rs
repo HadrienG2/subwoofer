@@ -13,7 +13,7 @@ pub struct DivDenominatorMin;
 impl<T: FloatLike> Operation<T> for DivDenominatorMin {
     const NAME: &str = "div_denominator_min";
 
-    // One register for the 2.0 upper bound
+    // One register for the upper bound
     fn aux_registers_regop(_input_registers: usize) -> usize {
         1
     }
@@ -43,8 +43,11 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<T,
 
     #[inline]
     fn begin_run(self, rng: impl Rng) -> Self {
+        // We start close to the upper bound (at most 2x smaller). This gives us
+        // maximal headroom against hitting the T::MIN_POSITIVE underflow limit.
         Self {
-            accumulators: operations::normal_accumulators(rng),
+            accumulators: operations::normal_accumulators(rng)
+                .map(|acc: T| upper_bound::<T>() / (acc * T::splat(2.0)).sqrt()),
         }
     }
 
@@ -53,19 +56,29 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<T,
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        // No need to hide inputs for this benchmark, compiler can't exploit
-        // knowledge of input reuse here
+        // No need to hide inputs for this benchmark, the compiler can't exploit
+        // its knowledge that inputs are being reused
+        let upper_bound = upper_bound::<T>();
         operations::integrate_full::<_, _, ILP, false>(
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, false>,
             inputs,
             move |acc, elem| {
-                // If elem is subnormal, the result is inifite, but the min
-                // takes us back to normal range. Those events aside, this is a
-                // truncated multiplicative random walk that cannot go higher
-                // than 2.0. This means we can only use half of the available
-                // exponent range, but for out purposes that's enough.
-                operations::hide_single_accumulator(acc / elem).fast_min(T::splat(2.0))
+                // - If elem is subnormal, the ratio is likely to be infinite
+                //   but the MIN will get the accumulator back to normal range
+                // - If elem is normal, this is effectively a multiplicative
+                //   random walk of step [0.5; 2[ with an upper bound
+                //   * It is a multiplicative random walk because the
+                //     distribution of input values is chosen to ensure that the
+                //     distribution of 1/elem is the same as that of elem, and
+                //     that repeatedly multiplying by elem results in a
+                //     multiplicative random walk.
+                //   * The random walk has a low chance of going below
+                //     T::MIN_POSITIVE because input values are distributed in
+                //     such a way that there is an equal chance of having elem
+                //     and 1/elem in the input data stream, preventing long-term
+                //     growth or shrinkage.
+                operations::hide_single_accumulator(acc / elem).fast_min(upper_bound)
             },
         );
     }
@@ -74,4 +87,17 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<T,
     fn consume_outputs(self) {
         operations::consume_accumulators(self.accumulators);
     }
+}
+
+/// Upper bound that we impose on accumulator values
+///
+/// Dividing by a subnormal number can produce infinite results, so we use a MIN
+/// to get back to normal range. The upper bound should also allow us to avoid
+/// transient infinities when dividing by normal numbers, so we want
+/// `upper_bound / 0.5 < T::MAX`, i.e. `upper_bound > T::MAX / 2`.
+///
+/// On top of this fundamental limit, we add a /2 safety margin to protect
+/// ourselves against rounding issues in e.g. the RNG in use.
+fn upper_bound<T: FloatLike>() -> T {
+    T::MAX / T::splat(4.0)
 }

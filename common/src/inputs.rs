@@ -3,23 +3,6 @@
 use crate::floats::FloatLike;
 use rand::prelude::*;
 
-/// Fill a buffer with positive normal and subnormal inputs
-///
-/// The order of normal vs subnormal inputs is not randomized yet, this will be
-/// taken care of by [`make_sequence()`](FloatSet::make_sequence()) later on.
-pub fn generate_positive<T: FloatLike, R: Rng>(set: &mut [T], rng: &mut R, num_subnormals: usize) {
-    assert!(num_subnormals <= set.len());
-    let (subnormal_target, normal_target) = set.split_at_mut(num_subnormals);
-    let subnormal = T::subnormal_sampler::<R>();
-    for target in subnormal_target {
-        *target = subnormal(rng);
-    }
-    let normal = T::normal_sampler::<R>();
-    for target in normal_target {
-        *target = normal(rng);
-    }
-}
-
 /// Unordered collection of benchmark inputs, to be ordered before use
 ///
 /// For sufficiently small collections of inputs (register inputs being the

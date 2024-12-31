@@ -108,10 +108,12 @@ pub trait FloatLike:
     fn fast_max(self, other: Self) -> Self;
 
     // We're also gonna need some float data & ops not exposed via std traits.
+    const MANTISSA_DIGITS: u32;
+    const MIN_POSITIVE: Self;
+    const MAX: Self;
     //
     // Implementations of all of these functions must be marked `#[inline]` as
     // they will be called within the timed benchmark loop.
-    const MANTISSA_DIGITS: u32;
     fn splat(x: f32) -> Self;
     fn mul_add(self, factor: Self, addend: Self) -> Self;
     fn sqrt(self) -> Self;
@@ -175,6 +177,8 @@ impl FloatLike for f32 {
     }
 
     const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
+    const MIN_POSITIVE: Self = f32::MIN_POSITIVE;
+    const MAX: Self = f32::MAX;
 
     #[inline]
     fn splat(x: f32) -> Self {
@@ -245,6 +249,8 @@ impl FloatLike for f64 {
     }
 
     const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
+    const MIN_POSITIVE: Self = f64::MIN_POSITIVE;
+    const MAX: Self = f64::MAX;
 
     #[inline]
     fn splat(x: f32) -> Self {
@@ -330,6 +336,8 @@ where
     }
 
     const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
+    const MIN_POSITIVE: Self = Self::from_array([f32::MIN_POSITIVE; WIDTH]);
+    const MAX: Self = Self::from_array([f32::MAX; WIDTH]);
 
     #[inline]
     fn splat(x: f32) -> Self {
@@ -415,6 +423,8 @@ where
     }
 
     const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
+    const MIN_POSITIVE: Self = Self::from_array([f64::MIN_POSITIVE; WIDTH]);
+    const MAX: Self = Self::from_array([f64::MAX; WIDTH]);
 
     #[inline]
     fn splat(x: f32) -> Self {

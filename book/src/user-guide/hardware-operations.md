@@ -64,30 +64,31 @@ Why "positive", you may ask? Well, for now we only test with positive inputs,
 for a few reasons:
 
 - Computing square roots of negative numbers is normally a math error,
-  well-behaved programs shouldn't do that in a loop in their hot code path.
+  well-behaved programs shouldn't do that in a loop in their hot code path. So
+  the
 - The square root of a negative number is a NaN, and going back from a NaN to a
   normal number of a reasonable order of magnitude without breaking the
   dependency chain is a lot messier than going from a subnormal to a normal
   number (need to play weird tricks with the exponent bits of the underlying
   IEEE-754 representation).
-- It is not uncommon for the negative argument path of the function that people
-  use to be at least partially handled in software, so getting to the hardware
-  overhead is difficult, and if we do it won't be representative of typical
+- The negative argument path of the sqrt() function that people actually use is
+  often at least partially handled in software, so getting to the hardware
+  overhead is difficult, and even if we do it won't be representative of typical
   real-world performance.
 
 ## DIV
 
-Division is interesting because it is one of the few standard IEEE-754 binary
+Division is interesting because it is one of the few basic IEEE-754 binary
 arithmetic operations where the two input operands play a highy asymmetrical
-role.
+role:
 
 - If we divide possibly subnormal inputs by a normal number, and use the output
   as the denominator of the next division, then we are effectively doing the
   same as multiplying a possibly subnormal number by the inverse of a normal
   number, which is another normal number. As a result, we end up with a pattern
   that is quite similar to that of the `mul_max` benchmark, and again we can use
-  MAX as a mechanism to recover from subnormal outputs. This is how the
+  MAX as a cheap mechanism to recover from subnormal outputs. This is how the
   `div_numerator_max` benchmark works.
 
-TODO: Fix div_denominator_min, then explain it
+TODO: Fix div_denominator_min math, then explain it
 TODO: Explain FMA benchmarks

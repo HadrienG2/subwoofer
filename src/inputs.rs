@@ -1,6 +1,9 @@
 //! Benchmarking of individual data sources (registers, L1/L2/L3 caches, RAM...)
 
-use common::operations::{self, Benchmark};
+use common::{
+    floats::FloatLike,
+    operations::{self, Benchmark},
+};
 use criterion::{measurement::WallTime, BenchmarkGroup};
 use rand::prelude::*;
 
@@ -49,7 +52,7 @@ pub(crate) fn benchmark_registers<B: Benchmark, const INPUT_REGISTERS: usize>(
         // Generate input data
         let num_subnormals = subnormal_share * INPUT_REGISTERS / num_subnormal_configurations;
         let mut inputs = [B::Float::default(); INPUT_REGISTERS];
-        common::inputs::generate_positive(&mut inputs, &mut config.rng, num_subnormals);
+        generate_positive(&mut inputs, &mut config.rng, num_subnormals);
 
         // Name this subnormal configuration
         let input_name = format!(
@@ -82,7 +85,7 @@ pub(crate) fn benchmark_memory<B: Benchmark>(
         let subnormal_probability =
             subnormal_probability as f64 / MAX_SUBNORMAL_CONFIGURATIONS as f64;
         let num_subnormals = (subnormal_probability * input_storage.len() as f64).round() as usize;
-        common::inputs::generate_positive(input_storage, &mut config.rng, num_subnormals);
+        generate_positive(input_storage, &mut config.rng, num_subnormals);
 
         // Name this subnormal configuration
         let input_name = format!(
@@ -99,5 +102,48 @@ pub(crate) fn benchmark_memory<B: Benchmark>(
             input_name,
             &mut config.rng,
         );
+    }
+}
+
+/// Fill a buffer with positive normal and subnormal inputs
+///
+/// The order of normal vs subnormal inputs is not randomized yet, this will be
+/// taken care of by
+/// [`make_sequence()`](common::inputs::FloatSet::make_sequence()) later on.
+fn generate_positive<T: FloatLike, R: Rng>(set: &mut [T], rng: &mut R, num_subnormals: usize) {
+    // Generate subnormal inputs
+    assert!(num_subnormals <= set.len());
+    let (subnormal_target, normal_target) = set.split_at_mut(num_subnormals);
+    let subnormal = T::subnormal_sampler::<R>();
+    for target in subnormal_target {
+        *target = subnormal(rng);
+    }
+
+    // Split normal inputs, if any, in two parts. The smaller half is random...
+    if normal_target.is_empty() {
+        return;
+    }
+    let normal = T::normal_sampler::<R>();
+    let num_normals = normal_target.len();
+    let (random, inverses) = normal_target.split_at_mut(num_normals / 2);
+    for elem in random.iter_mut() {
+        *elem = normal(rng);
+    }
+
+    // ...while the other half is made of the inverses of the random half,
+    // padded with an extra 1 when the halves do not have the same length.
+    //
+    // This ensures that the product of all normal inputs is 1, and thus that
+    // multiplicative accumulators get back to their initial value after being
+    // multiplied by all normal inputs. Which, in turn, maximizes the chances
+    // that multiplicative random walks won't land above T::MAX or below
+    // T::MIN_POSITIVE, even when constantly reusing a small set of inputs in a
+    // long-running benchmarking loop.
+    for (elem, inverse) in random.iter().zip(inverses.iter_mut()) {
+        *inverse = T::splat(1.0) / *elem;
+    }
+    if inverses.len() > random.len() {
+        assert_eq!(inverses.len(), random.len() + 1);
+        *inverses.last_mut().unwrap() = T::splat(1.0);
     }
 }

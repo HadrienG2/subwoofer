@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of FMA with a possibly subnormal addend, followed by MIN"
+description = "Benchmark of FMA with a possibly subnormal multiplier, used in an ADD/SUB pattern"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "fma_addend_min"
+name = "fma_multiplier_bidi"
 repository.workspace = true
 version.workspace = true
 

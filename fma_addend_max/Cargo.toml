@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of FMA with a possibly subnormal multiplier, followed by MIN"
+description = "Benchmark of FMA with a possibly subnormal addend, followed by MAX"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "fma_multiplier_min"
+name = "fma_addend_max"
 repository.workspace = true
 version.workspace = true
 

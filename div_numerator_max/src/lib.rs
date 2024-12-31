@@ -1,11 +1,10 @@
 use common::{
-    arch::HAS_MEMORY_OPERANDS,
+    arch::{ALLOWS_DIV_MEMORY_NUMERATOR, ALLOWS_DIV_OUTPUT_DENOMINATOR},
     floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
     operations::{self, Benchmark, Operation},
 };
 use rand::Rng;
-use target_features::Architecture;
 
 /// DIV with a possibly subnormal numerator, followed by MAX
 #[derive(Clone, Copy)]
@@ -14,27 +13,15 @@ pub struct DivNumeratorMax;
 impl<T: FloatLike> Operation<T> for DivNumeratorMax {
     const NAME: &str = "div_numerator_max";
 
-    // One register for the 0.5 lower bound + a temporary on all CPU ISAs where
-    // DIV cannot emit its output to the register that holds the denominator
-    // TODO: Make sure only x86 got this silly idea
+    // One register for the lower bound + a temporary on all CPU ISAs where DIV
+    // cannot emit its output to the register that holds the denominator
     fn aux_registers_regop(_input_registers: usize) -> usize {
-        1 + cfg!(all(
-            any(target_arch = "x86", target_arch = "x86_64"),
-            not(target_feature = "avx")
-        )) as usize
+        1 + ALLOWS_DIV_OUTPUT_DENOMINATOR as usize
     }
 
-    // Still need the lower bound, the question is, can we use a memory input
-    // for the numerator of a division?
-    const AUX_REGISTERS_MEMOP: usize = const {
-        let target = target_features::CURRENT_TARGET;
-        match target.architecture() {
-            // As of AVX-512 at least, x86 will not allow that
-            Architecture::X86 => 2,
-            // TODO: Check for other architectures
-            _ => 1 + (!HAS_MEMORY_OPERANDS) as usize,
-        }
-    };
+    // Still need the lower bound register. But the question is, can we use a
+    // memory input for the numerator of a division?
+    const AUX_REGISTERS_MEMOP: usize = 1 + (!ALLOWS_DIV_MEMORY_NUMERATOR) as usize;
 
     fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
         DivNumeratorMaxBenchmark {
@@ -68,18 +55,23 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<T, I
     where
         Inputs: FloatSequence<Element = Self::Float>,
     {
-        // No need to hide inputs for this benchmark, compiler can't exploit
-        // knowledge of input reuse here
+        // No need to hide inputs for this benchmark, the compiler can't exploit
+        // its knowledge that inputs are being reused here
+        let lower_bound = lower_bound::<T>();
         operations::integrate_full::<_, _, ILP, false>(
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, false>,
             inputs,
             move |acc, elem| {
-                // If elem is subnormal, the max takes us back to normal range,
-                // otherwise this is a truncated multiplicative random walk that
-                // cannot go lower than 0.5. In that case we can only use half
-                // of the available exponent range but that's enough.
-                operations::hide_single_accumulator(elem / acc).fast_max(T::splat(0.5))
+                // - If elem is subnormal, the MAX makes the output normal again
+                // - If elem is normal, this is a weird kind of random wolk
+                //   * ...but however weird, this walk is bounded on both sides
+                //     because by imposing a minimal accumulator value, we also
+                //     impose a lower bound on the denominator of the division,
+                //     and thus an upper limit to the ratio that will become the
+                //     next accumulator. See the docs of lower_bound below for a
+                //     longer demonstration.
+                operations::hide_single_accumulator(elem / acc).fast_max(lower_bound)
             },
         );
     }
@@ -88,4 +80,25 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<T, I
     fn consume_outputs(self) {
         operations::consume_accumulators(self.accumulators);
     }
+}
+
+/// Lower bound that we impose on accumulator values
+///
+/// Dividing a subnormal number by our accumulator can produce a subnormal
+/// result, so we use a MAX to get back to normal range. The lower bound is
+/// chosen to ensure that...
+///
+/// - The resulting accumulator is a normal number, above `T::MIN_POSITIVE`.
+/// - `elem / acc` cannot overflow when acc is at this lower bound. Since `elem
+///   <= 2`, this means that we want `2 / lower_bound < T::MAX` i.e.
+///   `lower_bound > 2 / T::MAX`.
+/// - At this upper limit of the accumulator range `max_acc = 2 / lower_bound`,
+///   the `elem / acc` ratio should not underflow below `T::MIN_POSITIVE` when
+///   elem is normal. Since `elem >= 0.5` in that case, this requires `0.5 /
+///   max_acc > T::MIN_POSITIVE` i.e. `lower_bound > 4 * T::MIN_POSITIVE`.
+///
+/// We add a 2x safety margin on top of these limits to protect ourselves
+/// against rounding issues in e.g. the RNG we use.
+fn lower_bound<T: FloatLike>() -> T {
+    (T::splat(8.0) * T::MIN_POSITIVE).fast_max(T::splat(4.0) / T::MAX)
 }

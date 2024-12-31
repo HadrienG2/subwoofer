@@ -2,7 +2,30 @@
 
 use target_features::Architecture;
 
-/// Truth that the current hardware architecture is known to have native FMA
+/// Truth that the current CPU ISA allows emitting the result of a division in
+/// the register that used to hold the denominator
+pub const ALLOWS_DIV_OUTPUT_DENOMINATOR: bool = const {
+    let target = target_features::CURRENT_TARGET;
+    match target.architecture() {
+        Architecture::X86 => target.supports_feature_str("avx"),
+        // TODO: Check for other architectures
+        _ => true,
+    }
+};
+
+/// Truth that the current CPU ISA allows using a memory operand for the
+/// numerator of a division. Implies HAS_MEMORY_OPERANDS.
+pub const ALLOWS_DIV_MEMORY_NUMERATOR: bool = const {
+    let target = target_features::CURRENT_TARGET;
+    match target.architecture() {
+        // As of AVX-512 at least, x86 will not allow this
+        Architecture::X86 => false,
+        // TODO: Check for other architectures
+        _ => HAS_MEMORY_OPERANDS,
+    }
+};
+
+/// Truth that the current CPU ISA has a fused multiply-add instruction
 pub const HAS_HARDWARE_FMA: bool = const {
     let target = target_features::CURRENT_TARGET;
     match target.architecture() {
@@ -12,13 +35,26 @@ pub const HAS_HARDWARE_FMA: bool = const {
     }
 };
 
-/// Truth that the current hardware architecture is known to support memory
-/// operands for scalar and SIMD operations.
+/// Truth that the current CPU ISA has an FNMA instruction
+///
+/// FNMA is to FMA what `-a * b + c` is to `a * b + c`.
+pub const HAS_HARDWARE_NEGATED_FMA: bool = const {
+    let target = target_features::CURRENT_TARGET;
+    match target.architecture() {
+        Architecture::X86 => target.supports_feature_str("fma"),
+        // TODO: Check for other architectures
+        _ => false,
+    }
+};
+
+/// Truth that the CPU ISA is known to support memory operands for scalar and
+/// SIMD operations.
 ///
 /// This means that when we are doing benchmarks like `addsub` that directly
 /// reduce memory inputs into accumulators, we don't need to load inputs into
-/// CPU registers before reducing them into the accumulator. As a result, we can
-/// use more CPU registers as accumulators on those benchmarks.
+/// CPU registers before reducing them into the accumulator. This reduces
+/// register pressure, so we can use more CPU registers as accumulators on those
+/// some benchmarks.
 pub const HAS_MEMORY_OPERANDS: bool = const {
     let target = target_features::CURRENT_TARGET;
     match target.architecture() {
