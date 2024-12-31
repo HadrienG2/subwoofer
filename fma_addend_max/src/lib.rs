@@ -13,7 +13,7 @@ pub struct FmaAddendMax;
 impl<T: FloatLike> Operation<T> for FmaAddendMax {
     const NAME: &str = "fma_addend_max";
 
-    // One register for the growth factor, one for the lower bound
+    // One register for the shrinking factor, one for the lower bound
     fn aux_registers_regop(_input_registers: usize) -> usize {
         2
     }

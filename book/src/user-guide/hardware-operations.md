@@ -65,16 +65,16 @@ for a few reasons:
 
 - Computing square roots of negative numbers is normally a math error,
   well-behaved programs shouldn't do that in a loop in their hot code path. So
-  the
+  the performance of the error path isn't that important.
 - The square root of a negative number is a NaN, and going back from a NaN to a
   normal number of a reasonable order of magnitude without breaking the
   dependency chain is a lot messier than going from a subnormal to a normal
-  number (need to play weird tricks with the exponent bits of the underlying
-  IEEE-754 representation).
-- The negative argument path of the sqrt() function that people actually use is
-  often at least partially handled in software, so getting to the hardware
-  overhead is difficult, and even if we do it won't be representative of typical
-  real-world performance.
+  number (can't just use a MAX, need to play weird tricks with the exponent bits
+  of the underlying IEEE-754 representation).
+- The negative argument path of the libm `sqrt()` function that people actually
+  use is often at least partially handled in software, so getting to the
+  hardware overhead is difficult, and even if we manage it won't be
+  representative of typical real-world performance.
 
 ## DIV
 
