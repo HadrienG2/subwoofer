@@ -31,7 +31,7 @@ impl<'criterion> TypeBenchmark<'criterion> {
             .iter()
             .copied()
             .enumerate()
-            .map(|(idx, cache_size)| (format!("L{}", idx + 1), max_size_to_fit(cache_size)))
+            .map(|(idx, cache_size)| (format!("L{}cache", idx + 1), max_size_to_fit(cache_size)))
             .chain(std::iter::once((
                 "RAM".to_string(),
                 min_size_to_overflow(*cache_stats.total_data_cache_sizes().last().unwrap()),
