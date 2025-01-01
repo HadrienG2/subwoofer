@@ -148,7 +148,7 @@ jobs:
       # subnormal shares or the more remote memory data sources as they
       # shouldn't affect the chances of panicking much.
       - name: Check that benchmarks accept Criterion arguments and don't panic
-        run: cargo bench --all-features -- --profile-time=1 '(L1cache|[0-9]+registers?)/([01]00\.0%|00in[0-9]+)$'
+        run: cargo bench --all-features -- --profile-time=1 '(L1cache|[0-9]+register(s)?)/([01]00\.0%|(0)+in[0-9]+)$'
 
   # Update the book if all other CI jobs pass
   deploy-book:
