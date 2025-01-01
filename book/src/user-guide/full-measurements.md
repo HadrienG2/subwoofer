@@ -46,9 +46,8 @@ Here's how to decide which benchmarks you can disable:
 - If **none** of the `mul_max` and `fma_full_max_mul` benchmarks were affected
   by subnormals, you can disable the `mul_max` benchmark during the full
   measurement.
-- Finally, you cannot disable the `max` benchmark during the full measurement
-  unless **all** benchmarks except for `addsub` were **unaffected** by
-  subnormals.
+- You cannot disable the `max` benchmark during the full measurement unless
+  **all** benchmarks except for `addsub` were **unaffected** by subnormals.
 
 If you are in one of those cases, you may want to stop using the catch-all
 `measure` Cargo feature, and instead use finer-grained Cargo features that let
