@@ -119,7 +119,7 @@ insight into the underlying hardware implementation of subnormal arithmetic.
 ## Data type
 
 Besides individual single and double precision numbers, many CPUs can process
-data in SIMD batches of one or more width. On microarchitectures with a
+data in SIMD batches of one or more widths. On microarchitectures with a
 sufficiently dark and troubled past, we could expect the subnormals fallback
 path to behave differently depending on the precision of the floating-point
 number that are being manipulated, or the width of the SIMD batches. Such
