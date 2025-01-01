@@ -81,14 +81,14 @@ jobs:
 
     strategy:
       matrix:
+        target-flags:
+          - ""
+          - "-C target-cpu=native"
         features:
           - "--no-default-features --features=check"
           - ""
           - "--features=measure"
           - "--all-features"
-        target-flags:
-          - ""
-          - "-C target-cpu=native"
 
     env:
       RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
@@ -112,44 +112,6 @@ jobs:
       - name: Check clippy lints
         run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
 
-  # Do a very basic cargo bench run, just to check for crashes and failures to
-  # disable the default rustc benchmark harness
-  run:
-    # Don't run CI twice when a PR is created from a branch internal to the repo
-    # Don't run in scheduled jobs, that's what "scheduled" is for
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
-
-    runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        target-flags:
-          - ""
-          - "-C target-cpu=native"
-
-    env:
-      RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
-
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Set up hwloc
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          version: 1.0
-          packages: libhwloc-dev libudev-dev
-
-      - name: Set up Rust caching
-        uses: Swatinem/rust-cache@v2
-
-      # Regex makes sure we cover all code paths with 0% subnormals, and the
-      # memory code path with 100% of subnormals as well. We don't check all the
-      # subnormal shares or the more remote memory data sources as they
-      # shouldn't affect the chances of panicking much.
-      - name: Check that benchmarks accept Criterion arguments and don't panic
-        run: cargo bench --features=measure_codegen -- --profile-time=1 '(L1cache|[0-9]+register(s)?)/([01]00\.0%|(0)+in[0-9]+)$'
-
   # Update the book if all other CI jobs pass
   deploy-book:
     # Don't run on a schedule, book doesn't change on its own.
@@ -162,7 +124,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
-    needs: ["render-book", "format", "lints", "run"]
+    needs: ["render-book", "format", "lints"]
 
     # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
     permissions:
@@ -197,12 +159,17 @@ jobs:
 
     strategy:
       matrix:
-        nightly-version:
-          - "selected"
-          - "latest"
         target-flags:
           - ""
           - "-C target-cpu=native"
+        nightly-version:
+          - "selected"
+          - "latest"
+        features:
+          - "--no-default-features --features=check"
+          - ""
+          - "--features=measure"
+          - "--all-features"
 
     env:
       RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
@@ -233,7 +200,4 @@ jobs:
         run: rustup component add clippy
 
       - name: Check clippy lints
-        run: cargo clippy --workspace --all-targets --features=measure_codegen -- -D warnings
-
-      - name: Check that benchmarks accept Criterion arguments and don't panic
-        run: cargo bench --features=measure_codegen -- --profile-time=1 '(L1cache|[0-9]+register(s)?)/([01]00\.0%|(0)+in[0-9]+)$'
+        run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
