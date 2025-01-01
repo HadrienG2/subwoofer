@@ -37,8 +37,8 @@ jobs:
 
       - name: Install mdbook and mdbook-katex
         uses: taiki-e/install-action@v2
-          with:
-            tool: mdbook,mdboook-katex
+        with:
+          tool: mdbook,mdboook-katex
 
       - name: Render the book
         run: (mkdir public && cd book && mdbook build -d ../public)
