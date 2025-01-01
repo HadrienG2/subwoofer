@@ -1,0 +1,255 @@
+# There are two kinds of continuous integration jobs in this project:
+#
+# - Every code submission or master push passes continuous integration on the
+#   minimal supported Rust version and the current stable Rust version.
+# - Two times a month, a scheduled job makes sure that the code remains
+#   compatible and lint-free on upcoming Rust toolchains (beta and nightly).
+
+name: Continuous Integration
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 0 3/15 * *'
+
+# Cancel existing jobs on new pushes to the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  # Render the book
+  render-book:
+    # Don't run CI twice when a PR is created from a branch internal to the repo
+    # Don't run on a schedule, book doesn't change on its own.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install mdbook and mdbook-katex
+        uses: taiki-e/install-action@v2
+          with:
+            tool: mdbook,mdboook-katex
+
+      - name: Render the book
+        run: (mkdir public && cd book && mdbook build -d ../public)
+
+      - name: Upload the book
+        uses: actions/upload-artifact@v3
+        with:
+          name: book
+          path: ./public
+          if-no-files-found: error
+
+
+  # Format doesn't depend on configuration
+  format:
+    # Don't run CI twice when a PR is created from a branch internal to the repo
+    # Don't run in scheduled jobs, that's what "scheduled" is for
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up hwloc
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          version: 1.0
+          packages: libhwloc-dev
+
+      - name: Set up Rust caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Check code formatting
+        run: cargo fmt --all --check
+
+
+    # Lints can vary depending on hardware and benchmark features
+    lints:
+      # Don't run CI twice when a PR is created from a branch internal to the repo
+      # Don't run in scheduled jobs, that's what "scheduled" is for
+      if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+
+      runs-on: ubuntu-latest
+
+      strategy:
+        matrix:
+          features:
+            - "--no-default-features"
+            - ""
+            - "--features=measure"
+            - "--all-features"
+          target-flags:
+            - ""
+            - "-C target-cpu=native"
+
+      env:
+        RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
+
+      steps:
+        - name: Checkout sources
+          uses: actions/checkout@v4
+
+        - name: Set up hwloc
+          uses: awalsh128/cache-apt-pkgs-action@latest
+          with:
+            version: 1.0
+            packages: libhwloc-dev
+
+        - name: Set up Rust caching
+          uses: Swatinem/rust-cache@v2
+
+        - name: Install clippy
+          run: rustup component add clippy
+
+        - name: Check clippy lints
+          run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
+
+
+  # Do a very basic cargo bench run, just to check for crashes and failures to
+  # disable the default rustc benchmark harness
+  run:
+    # Don't run CI twice when a PR is created from a branch internal to the repo
+    # Don't run in scheduled jobs, that's what "scheduled" is for
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        features:
+          - "--no-default-features"
+          - ""
+          - "--features=measure"
+          - "--all-features"
+        target-flags:
+          - ""
+          - "-C target-cpu=native"
+
+    env:
+      RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up hwloc
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          version: 1.0
+          packages: libhwloc-dev
+
+      - name: Set up Rust caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check that benchmarks accept Criterion arguments and don't panic
+        run: cargo bench ${{ matrix.features }} -- --profile-time=1
+
+
+  # Update the book if all other CI jobs pass
+  deploy-book:
+    # Don't run on a schedule, book doesn't change on its own.
+    # Don't run on pull request events, they don't have permission to deploy
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    needs: ["render-book", "format", "lints", "run"]
+
+    # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
+    permissions:
+      pages: write      # to deploy to Pages
+      id-token: write   # to verify the deployment originates from an appropriate source
+
+    steps:
+      - name: Download the book
+        uses: actions/download-artifact@v3
+        with:
+          name: book
+          path: .
+
+      - name: Configure github pages
+        uses: actions/configure-pages@v1
+
+      - name: Upload book to github pages
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: .
+
+      - name: Deploy github pages
+        id: deployment
+        uses: actions/deploy-pages@v1
+
+
+  # Check compatibility with newer Rust and dependencies versions (scheduled CI)
+  scheduled:
+    if: github.event_name == 'schedule'
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        nightly-version:
+          - "selected"
+          - "latest"
+        features:
+          - "--no-default-features"
+          - ""
+          - "--features=measure"
+          - "--all-features"
+        target-flags:
+          - ""
+          - "-C target-cpu=native"
+
+    env:
+      RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up hwloc
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          version: 1.0
+          packages: libhwloc-dev
+
+      # No caching here because the job does not run often enough
+
+      - name: Switch to latest rust nightly
+        run: echo "nightly" > rust-toolchain
+        if: matrix.nightly-version == "latest"
+
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Check code formatting
+        run: cargo fmt --all --check
+
+      - name: Install clippy
+        run: rustup component add clippy
+
+      - name: Check clippy lints
+        run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
+
+      - name: Check that benchmarks accept Criterion arguments and don't panic
+        run: cargo bench ${{ matrix.features }} -- --profile-time=1
