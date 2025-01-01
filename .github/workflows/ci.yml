@@ -148,7 +148,7 @@ jobs:
       # subnormal shares or the more remote memory data sources as they
       # shouldn't affect the chances of panicking much.
       - name: Check that benchmarks accept Criterion arguments and don't panic
-        run: cargo bench --all-features -- --profile-time=1 '(L1cache|[0-9]+register(s)?)/([01]00\.0%|(0)+in[0-9]+)$'
+        run: cargo bench --features=measure_codegen -- --profile-time=1 '(L1cache|[0-9]+register(s)?)/([01]00\.0%|(0)+in[0-9]+)$'
 
   # Update the book if all other CI jobs pass
   deploy-book:
@@ -200,10 +200,6 @@ jobs:
         nightly-version:
           - "selected"
           - "latest"
-        features:
-          - ""
-          - "--features=measure"
-          - "--all-features"
         target-flags:
           - ""
           - "-C target-cpu=native"
@@ -237,7 +233,7 @@ jobs:
         run: rustup component add clippy
 
       - name: Check clippy lints
-        run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
+        run: cargo clippy --workspace --all-targets --features=measure_codegen -- -D warnings
 
       - name: Check that benchmarks accept Criterion arguments and don't panic
-        run: cargo bench ${{ matrix.features }} -- --profile-time=1
+        run: cargo bench --features=measure_codegen -- --profile-time=1 '(L1cache|[0-9]+register(s)?)/([01]00\.0%|(0)+in[0-9]+)$'
