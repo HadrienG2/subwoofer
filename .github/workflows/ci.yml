@@ -233,7 +233,7 @@ jobs:
 
       - name: Switch to latest rust nightly
         run: echo "nightly" > rust-toolchain
-        if: matrix.nightly-version == "latest"
+        if: matrix.nightly-version == 'latest'
 
       - name: Install rustfmt
         run: rustup component add rustfmt
