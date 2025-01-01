@@ -50,7 +50,6 @@ jobs:
           path: ./public
           if-no-files-found: error
 
-
   # Format doesn't depend on configuration
   format:
     # Don't run CI twice when a PR is created from a branch internal to the repo
@@ -78,48 +77,46 @@ jobs:
       - name: Check code formatting
         run: cargo fmt --all --check
 
+  # Lints can vary depending on hardware and benchmark features
+  lints:
+    # Don't run CI twice when a PR is created from a branch internal to the repo
+    # Don't run in scheduled jobs, that's what "scheduled" is for
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
 
-    # Lints can vary depending on hardware and benchmark features
-    lints:
-      # Don't run CI twice when a PR is created from a branch internal to the repo
-      # Don't run in scheduled jobs, that's what "scheduled" is for
-      if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
 
-      runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - "--no-default-features"
+          - ""
+          - "--features=measure"
+          - "--all-features"
+        target-flags:
+          - ""
+          - "-C target-cpu=native"
 
-      strategy:
-        matrix:
-          features:
-            - "--no-default-features"
-            - ""
-            - "--features=measure"
-            - "--all-features"
-          target-flags:
-            - ""
-            - "-C target-cpu=native"
+    env:
+      RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
 
-      env:
-        RUSTFLAGS: "-D warnings ${{ matrix.target-flags }}"
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
 
-      steps:
-        - name: Checkout sources
-          uses: actions/checkout@v4
+      - name: Set up hwloc
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          version: 1.0
+          packages: libhwloc-dev
 
-        - name: Set up hwloc
-          uses: awalsh128/cache-apt-pkgs-action@latest
-          with:
-            version: 1.0
-            packages: libhwloc-dev
+      - name: Set up Rust caching
+        uses: Swatinem/rust-cache@v2
 
-        - name: Set up Rust caching
-          uses: Swatinem/rust-cache@v2
+      - name: Install clippy
+        run: rustup component add clippy
 
-        - name: Install clippy
-          run: rustup component add clippy
-
-        - name: Check clippy lints
-          run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
-
+      - name: Check clippy lints
+        run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
 
   # Do a very basic cargo bench run, just to check for crashes and failures to
   # disable the default rustc benchmark harness
@@ -159,7 +156,6 @@ jobs:
 
       - name: Check that benchmarks accept Criterion arguments and don't panic
         run: cargo bench ${{ matrix.features }} -- --profile-time=1
-
 
   # Update the book if all other CI jobs pass
   deploy-book:
