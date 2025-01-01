@@ -12,7 +12,7 @@
     - [Naming convention](user-guide/naming-convention.md)
     - [Latency/throughput](user-guide/latency-throughput.md)
     - [Hardware operations](user-guide/hardware-operations.md)
-    - [Other insight]()
+    - [Other insight](user-guide/other-insight.md)
 - [Results]()
   * [AMD]()
     - [Ryzen 7 4800H]()

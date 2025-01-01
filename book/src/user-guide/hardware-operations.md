@@ -33,17 +33,21 @@ Adding or subtracting a subnormal number to a normal number produces a normal
 number, therefore the overhead of ADD/SUB can be studied in isolation. Because
 these two operations have identical performance characteristics on all known
 hardware, we have a single `addsub` benchmark that measures the average of the
-performances of ADD on SUB, which should be equal to the performance of either
+performances of ADD and SUB, which should be equal to the performance of either
 ADD or SUB in isolation.
+
+The resulting benchmark design allows us to easily ensure that the underlying
+accumulator does not experience unbounded growth, which would eventually take it
+to infinity.
 
 ## MIN/MAX
 
 The maximum of a subnormal and a normal number is a normal number, therefore the
 overhead of MAX can be studied in isolation. This is done by the `max`
-benchmark. Sadly, MIN does not have this useful property, but its overhead is
-the same as that of MAX on all known hardware. So for now we will just assume
-that they have the same overhead and that measuring the performance of MAX is
-enough to know the performance of MIN.
+benchmark. Sadly, MIN does not have this useful property. But its performance
+characteristics are the same as those of MAX on all known hardware, so for now
+we will just assume that they have the same overhead and that measuring the
+performance of MAX is enough to know the performance of MIN.
 
 ## MUL
 
@@ -89,6 +93,62 @@ role:
   that is quite similar to that of the `mul_max` benchmark, and again we can use
   MAX as a cheap mechanism to recover from subnormal outputs. This is how the
   `div_numerator_max` benchmark works.
+- If we divide a normal number by possibly subnormal inputs, and use the output
+  as the numerator of the next division, then the main IEEE-754 special case
+  that we need to guard against is not subnormal outputs but infinite outputs.
+  This can be done using a MIN that takes infinities back into normal range, and
+  that is what the `div_denominator_min` benchmark does. As discussed above, to
+  analyze this benchmark, we will assume that MIN has the same performance
+  characteristics as MAX and use the results that we collected for MAX.
 
-TODO: Fix div_denominator_min math, then explain it
-TODO: Explain FMA benchmarks
+## FMA
+
+Because Fused Multiply-Add (FMA) has three operands that play two different
+roles (multiplier or addend), we have more freedom in how we set up a dependency
+chains of FMA with a feedback path from the output of operation N to one of the
+inputs of operation N+1. This is what we chose:
+
+* In benchmark `fma_multiplier_bidi`, the input data is fed to a multiplier
+  argment of the FMA, multiplied by a constant factor, and alternatively added
+  and subtracted from an accumulator. This is effectively the same as the
+  `addsub` benchmark, just with a larger or smaller step, so for this pattern we
+  can study the overhead of FMA with possibly subnormal multipliers in
+  isolation, without taking corrective action to guard against non-normal
+  outputs.
+* In benchmark `fma_addend_max`, input data is fed to the addend argument of the
+  FMA, and we add to it the current accumulator multiplied by a constant factor.
+  The result then becomes the next accumulator. Unfortunately, depending on how
+  we pick the constant factor, this factor is doomed to eventually overflow or
+  underflow in some input configurations:
+
+  - If the constant factor is >= 1 or sufficiently close to 1, then for a stream
+    of normal inputs the value of the accumulator will experience unbounded
+    growth and eventually overflow.
+  - If the constant factor is < 1, then for a stream of subnormal inputs the
+    value of the acccumulator will decay and eventually become subnormal.
+
+  We picked the latter option, so we use a MAX as a corrective action to prevent
+  accumulators from decaying to subnormal range.
+* In benchmark `fma_full_max_mul`, two substreams of the input data are fed to
+  the addend argument of the FMA and one of its multiplier argument, with the
+  feedback path taking the other multiplier argument. This configuration allows
+  us to check if the CPU has a particularly hard time with FMAs that produce
+  subnormal outputs, but due to the low level of input data control it is the
+  only benchmark where we need not one but two corrective actions:
+
+  - When both data arguments are subnormal, the output of the FMA is subnormal,
+    so we need a MAX to take the accumulator back to normal range before feeding
+    it back to the next benchmark iteration.
+  - If both data arguments are always normal, the accumulator experiences
+    unbounded growth, so we need some corrective action to prevent it from
+    diverging to infinity. We could have use MIN, but the combination of a MAX
+    and a MIN (also called a "clamp") may or may not be handled specially by a
+    CPU ISA, so analysing the benchmark results would require target-specific
+    care. Instead, we used multiplication by a sufficiently small constant
+    factor, which ensures that even in this all-normal input scenario the
+    accumulator value cannot experience unbounded growth, only decay.
+
+  To get back to the raw overhead of the FMA from the outputs of this benchmark,
+  you therefore need to subtract the overhead of both a MAX and a MUL from it.
+  This can be most easily done by subtracting the timings of the `mul_max`
+  benchmark from its timings.
