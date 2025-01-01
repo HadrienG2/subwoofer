@@ -38,7 +38,7 @@ jobs:
       - name: Install mdbook and mdbook-katex
         uses: taiki-e/install-action@v2
         with:
-          tool: mdbook,mdboook-katex
+          tool: mdbook,mdbook-katex
 
       - name: Render the book
         run: (mkdir public && cd book && mdbook build -d ../public)
@@ -88,7 +88,7 @@ jobs:
     strategy:
       matrix:
         features:
-          - "--no-default-features"
+          - "--no-default-features --features=check"
           - ""
           - "--features=measure"
           - "--all-features"
@@ -130,7 +130,6 @@ jobs:
     strategy:
       matrix:
         features:
-          - "--no-default-features"
           - ""
           - "--features=measure"
           - "--all-features"
@@ -208,7 +207,6 @@ jobs:
           - "selected"
           - "latest"
         features:
-          - "--no-default-features"
           - ""
           - "--features=measure"
           - "--all-features"
