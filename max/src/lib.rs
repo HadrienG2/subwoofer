@@ -62,7 +62,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for MaxBenchmark<T, ILP> {
     #[inline]
     fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
-        Inputs: FloatSequence<Element = Self::Float>,
+        Inputs: FloatSequence<Element = T>,
     {
         // No need to hide inputs for this benchmark, the compiler can't exploit
         // its knowledge that inputs are being reused.
@@ -75,7 +75,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for MaxBenchmark<T, ILP> {
     }
 
     #[inline]
-    fn consume_outputs(self) {
-        operations::consume_accumulators(self.accumulators);
+    fn accumulators(&self) -> &[T] {
+        &self.accumulators
     }
 }

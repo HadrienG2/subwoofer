@@ -1,11 +1,9 @@
 //! Benchmarking of individual data sources (registers, L1/L2/L3 caches, RAM...)
 
-use common::{
-    floats::FloatLike,
-    operations::{self, Benchmark},
-};
-use criterion::{measurement::WallTime, BenchmarkGroup};
+use common::{floats::FloatLike, inputs::FloatSet, operations::Benchmark};
+use criterion::{measurement::WallTime, BenchmarkGroup, Throughput};
 use rand::prelude::*;
+use std::time::Instant;
 
 /// Maximum granularity of subnormal occurence probabilities
 ///
@@ -62,7 +60,7 @@ pub(crate) fn benchmark_registers<B: Benchmark, const INPUT_REGISTERS: usize>(
         );
 
         // Run all the benchmarks on this input
-        operations::run_benchmark(
+        run_benchmark(
             config.benchmark,
             config.group,
             inputs,
@@ -95,7 +93,7 @@ pub(crate) fn benchmark_memory<B: Benchmark>(
         );
 
         // Run all the benchmarks on this input
-        operations::run_benchmark(
+        run_benchmark(
             config.benchmark,
             config.group,
             &mut *input_storage,
@@ -146,4 +144,45 @@ fn generate_positive<T: FloatLike, R: Rng>(set: &mut [T], rng: &mut R, num_subno
         assert_eq!(inverses.len(), random.len() + 1);
         *inverses.last_mut().unwrap() = T::splat(1.0);
     }
+}
+
+/// Measure the performance of a [`Benchmark`] on certain inputs
+#[inline(never)] // Faster build + easier profiling
+pub fn run_benchmark<B: Benchmark>(
+    benchmark: B,
+    group: &mut BenchmarkGroup<WallTime>,
+    mut inputs: impl FloatSet<Element = B::Float>,
+    input_name: String,
+    mut rng: impl Rng,
+) {
+    group.throughput(Throughput::Elements(B::num_operations(&inputs) as u64));
+    group.bench_function(input_name, move |b| {
+        b.iter_custom(|iters| {
+            // For each benchmark iteration batch, we ensure that...
+            //
+            // - The compiler cannot leverage the fact that the initial
+            //   accumulators are always the same in order to eliminate
+            //   "redundant" computations across iteration batches.
+            // - Inputs are randomly reordered from one batch to another, which
+            //   will avoid input order-related hardware bias if criterion runs
+            //   enough batches (as it does in its default configuration).
+            let mut benchmark = benchmark.begin_run(&mut rng);
+            let mut inputs = inputs.make_sequence(&mut rng);
+
+            // Timed region, this is the danger zone where inlining and compiler
+            // optimizations must be reviewed very carefully.
+            let start = Instant::now();
+            for _ in 0..iters {
+                benchmark.integrate_inputs(&mut inputs);
+            }
+            let elapsed = start.elapsed();
+
+            // Tell the compiler that the accumulated results are used so it
+            // doesn't delete the computation
+            for acc in benchmark.accumulators() {
+                pessimize::consume::<B::Float>(*acc);
+            }
+            elapsed
+        })
+    });
 }

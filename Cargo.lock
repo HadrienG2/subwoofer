@@ -683,6 +683,7 @@ dependencies = [
  "hwlocality",
  "max",
  "mul_max",
+ "pessimize",
  "rand",
  "sqrt_positive_max",
 ]

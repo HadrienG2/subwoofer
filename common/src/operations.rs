@@ -4,9 +4,7 @@ use crate::{
     floats::FloatLike,
     inputs::{FloatSequence, FloatSet},
 };
-use criterion::{measurement::WallTime, BenchmarkGroup, Throughput};
 use rand::prelude::*;
-use std::time::Instant;
 
 /// Floating-point operation that can be benchmarked
 pub trait Operation<T: FloatLike>: Copy {
@@ -43,7 +41,7 @@ pub trait Benchmark: Copy {
     /// Most benchmarks consume one input element per operation, in which case
     /// this will be [`inputs.reused_len(ilp)`](FloatSet::reused_len) with `ilp`
     /// set to this benchmark's accumulation ILP. But beware of benchmarks like
-    /// fma_full which consume two inputs per operation.
+    /// fma_full which consume multiple inputs per operation.
     fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize;
 
     /// Start a new benchmark run
@@ -59,7 +57,7 @@ pub trait Benchmark: Copy {
     /// [`additive_accumulators()`] or [`normal_accumulators()`] here.
     ///
     /// Implementations should be marked `#[inline]` to give the compiler a more
-    /// complete picture of the underlying data flow.
+    /// complete picture of the accumulator data flow.
     fn begin_run(self, rng: impl Rng) -> Self;
 
     /// Integrate a new batch of inputs into the internal state
@@ -88,53 +86,14 @@ pub trait Benchmark: Copy {
     where
         Inputs: FloatSequence<Element = Self::Float>;
 
-    /// End a benchmark run by making the compiler think the output is used
+    /// Access the benchmark's data accumulators
     ///
-    /// It is normally enough to pass the benchmark's internal accumulators
-    /// through the provided [`consume_accumulators()`] function.
+    /// This is used to mark the output of a benchmark as used, so that the
+    /// compiler doesn't delete the computation.
     ///
     /// Implementations should be marked `#[inline]` to give the compiler a more
-    /// complete picture of the underlying data flow.
-    fn consume_outputs(self);
-}
-
-/// Measure the performance of a [`Benchmark`] on certain inputs
-#[inline(never)] // Faster build + easier profiling
-pub fn run_benchmark<B: Benchmark>(
-    benchmark: B,
-    group: &mut BenchmarkGroup<WallTime>,
-    mut inputs: impl FloatSet<Element = B::Float>,
-    input_name: String,
-    mut rng: impl Rng,
-) {
-    group.throughput(Throughput::Elements(B::num_operations(&inputs) as u64));
-    group.bench_function(input_name, move |b| {
-        b.iter_custom(|iters| {
-            // For each benchmark iteration batch, we ensure that...
-            //
-            // - The compiler cannot leverage the fact that the initial
-            //   accumulators are always the same in order to eliminate
-            //   "redundant" computations across iteration batches.
-            // - Inputs are randomly reordered from one batch to another, which
-            //   will avoid input order-related hardware bias if criterion runs
-            //   enough batches (as it does in its default configuration).
-            let mut benchmark = benchmark.begin_run(&mut rng);
-            let mut inputs = inputs.make_sequence(&mut rng);
-
-            // Timed region, this is the danger zone where inlining and compiler
-            // optimizations must be reviewed very carefully.
-            let start = Instant::now();
-            for _ in 0..iters {
-                benchmark.integrate_inputs(&mut inputs);
-            }
-            let elapsed = start.elapsed();
-
-            // Tell the compiler that the accumulated results are used so it
-            // doesn't delete the computation
-            benchmark.consume_outputs();
-            elapsed
-        })
-    });
+    /// complete picture of the accumulator data flow.
+    fn accumulators(&self) -> &[Self::Float];
 }
 
 /// Initialize accumulators with a positive value that is suitable as the
@@ -336,13 +295,5 @@ pub fn hide_single_accumulator<T: FloatLike>(accumulator: T) -> T {
         pessimize::hide::<T>(accumulator)
     } else {
         accumulator
-    }
-}
-
-/// Consume accumulators at the end of a benchmark run
-#[inline]
-pub fn consume_accumulators<T: FloatLike, const ILP: usize>(accumulators: [T; ILP]) {
-    for acc in accumulators {
-        pessimize::consume::<T>(acc);
     }
 }

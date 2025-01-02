@@ -61,7 +61,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaMultiplierBidiBenchmark<T,
     #[inline]
     fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
-        Inputs: FloatSequence<Element = Self::Float>,
+        Inputs: FloatSequence<Element = T>,
     {
         // Overall, this is just the addsub benchmark with a step size that is
         // at most 2x smaller/larger, which fundamentally doesn't change much
@@ -75,7 +75,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaMultiplierBidiBenchmark<T,
     }
 
     #[inline]
-    fn consume_outputs(self) {
-        operations::consume_accumulators(self.accumulators);
+    fn accumulators(&self) -> &[T] {
+        &self.accumulators
     }
 }

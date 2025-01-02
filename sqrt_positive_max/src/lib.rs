@@ -57,7 +57,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmark<T, I
     #[inline]
     fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
-        Inputs: FloatSequence<Element = Self::Float>,
+        Inputs: FloatSequence<Element = T>,
     {
         let hide_accumulators = operations::hide_accumulators::<_, ILP, false>;
         let iter = |acc: T, elem: T| acc.fast_max(operations::hide_single_accumulator(elem.sqrt()));
@@ -90,7 +90,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmark<T, I
     }
 
     #[inline]
-    fn consume_outputs(self) {
-        operations::consume_accumulators(self.accumulators);
+    fn accumulators(&self) -> &[T] {
+        &self.accumulators
     }
 }

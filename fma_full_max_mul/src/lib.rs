@@ -60,7 +60,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullMaxMulBenchmark<T, ILP
     #[inline]
     fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
-        Inputs: FloatSequence<Element = Self::Float>,
+        Inputs: FloatSequence<Element = T>,
     {
         let lower_bound_preshrink = lower_bound_preshrink::<T>();
         let shrink = self.shrink;
@@ -118,8 +118,8 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaFullMaxMulBenchmark<T, ILP
     }
 
     #[inline]
-    fn consume_outputs(self) {
-        operations::consume_accumulators(self.accumulators);
+    fn accumulators(&self) -> &[T] {
+        &self.accumulators
     }
 }
 

@@ -233,6 +233,7 @@ fma_multiplier_bidi = { path = "./fma_multiplier_bidi", optional = true }
 hwlocality.workspace = true
 max = { path = "./max", optional = true }
 mul_max = { path = "./mul_max", optional = true }
+pessimize.workspace = true
 rand.workspace = true
 sqrt_positive_max = { path = "./sqrt_positive_max", optional = true }
 

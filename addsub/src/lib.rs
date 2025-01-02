@@ -53,7 +53,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
     #[inline]
     fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
     where
-        Inputs: FloatSequence<Element = Self::Float>,
+        Inputs: FloatSequence<Element = T>,
     {
         operations::integrate_halves(
             &mut self.accumulators,
@@ -64,7 +64,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
     }
 
     #[inline]
-    fn consume_outputs(self) {
-        operations::consume_accumulators(self.accumulators);
+    fn accumulators(&self) -> &[T] {
+        &self.accumulators
     }
 }
