@@ -6,6 +6,9 @@ multilingual = false
 src = "src"
 title = "Assessing the impact of subnormals with Subwoofer"
 
+[preprocessor.katex]
+after = ["links"]
+
 [output.html]
 edit-url-template = "https://github.com/hadrienG2/subwoofer/edit/main/book/{path}"
 git-repository-url = "https://github.com/hadrienG2/subwoofer"

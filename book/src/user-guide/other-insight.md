@@ -49,10 +49,11 @@ CPU microarchitecture, one might naively expect the associated overhead to grow
 linearly as the share of subnormal numbers in the input data stream increases.
 
 If we more rigorously spell out the underlying intuition, it is that processing
-a normal number has a certain cost N, processing a subnormal number has another
-cost S, and therefore the average floating-point operation cost that we
-eventually measure should be a weighted mean of these two costs `x*S + (1-x)*N`
-where `x` is the share of subnormal numbers in the input data stream.
+a normal number has a certain cost $ N $, processing a subnormal number has
+another cost $ S $, and therefore the average floating-point operation cost that
+we eventually measure should be a weighted mean of these two costs $ x \cdot S +
+(1-x) \cdot N $ where $ x $ is the share of subnormal numbers in the input data
+stream.
 
 This is indeed one possible hardware behavior, and some Intel CPUs are actually
 quite close to that performance model. But other CPU behaviors can be observed

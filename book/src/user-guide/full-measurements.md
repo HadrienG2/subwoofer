@@ -46,10 +46,10 @@ Here's how to decide which benchmarks you can disable:
 - If **none** of the `mul_max` and `fma_full_max_mul` benchmarks were affected
   by subnormals, you can disable the `mul_max` benchmark during the full
   measurement.
-- You cannot disable the `max` benchmark during the full measurement unless
-  **all** benchmarks except for `addsub` were **unaffected** by subnormals.
+- You **cannot** disable the `max` benchmark during the full measurement
+  **unless** no benchmark other than `addsub` was affected by subnormals.
 
-If you are in one of those cases, you may want to stop using the catch-all
+If you are in one of those cases, then you may want to stop using the catch-all
 `measure` Cargo feature, and instead use finer-grained Cargo features that let
 you control benchmarks on a case-by-case basis. Please check out the definition
 of the `measure` and `bench_xyz` features in [Subwoofer's
@@ -190,7 +190,8 @@ If you are interesed in studying those kind of effects, consider adding
 `more_memory_data_sources` to the set of Cargo features that you are enabling.
 This feature is never enabled by default because it falls a bit outside of the
 scope of what Subwoofer normally aims to measure (namely the impact of subnormal
-numbers on the performance of floating-point arithmetic).
+numbers on the performance of floating-point arithmetic) and it causes an
+enormous increase of total benchmark execution time.
 
 
 ## SIMD data types

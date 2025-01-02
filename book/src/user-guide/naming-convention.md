@@ -19,7 +19,7 @@ Benchmarks names folow a `type/op/ilp/source/%subnormals` structure where...
       code becomes throughput bound and saturates superscalar CPU backend
       resources, but the highest ILP configurations may not be optimal due to
       limitations of the CPU microarchitecture (e.g. CPU op cache/loop buffer
-      trashing) or the optimization barrier that we use.
+      trashing), the compiler, or the optimization barriers that we use.
     * If you observe that the highest ILP configuration is slower than the
       next-highest configuration, I advise re-running the benchmark with
       `more_ilp_configurations` added to the set of Cargo features, in order to
@@ -33,8 +33,8 @@ Benchmarks names folow a `type/op/ilp/source/%subnormals` structure where...
     * By default, we only cover the data sources where the impact of subnormals
       is expected to be the highest. If you want to measure how the impact of
       subnormals goes down when the code becomes more memory-bound, you can add
-      `more_data_sources` to the set of Cargo features. But this will increase
-      execution time.
+      `more_data_sources` to the set of Cargo features. But this will greatly 
+      increase execution time.
 - `%subnormals` indicates what percentage of subnormals is present in the input.
     * The proposed `measure` benchmark configuration has enough percentage
       resolution to precisely probe the overhead curve of all CPUs tested so
