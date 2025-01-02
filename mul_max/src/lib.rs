@@ -43,11 +43,8 @@ impl<T: FloatLike, const ILP: usize> Benchmark for MulMaxBenchmark<T, ILP> {
 
     #[inline]
     fn begin_run(self, rng: impl Rng) -> Self {
-        // We start close to the lower bound (at most 2x larger). This gives us
-        // maximal headroom against hitting the T::MAX overflow limit.
         Self {
-            accumulators: operations::normal_accumulators(rng)
-                .map(|acc: T| (acc * T::splat(2.0)).sqrt() * lower_bound::<T>()),
+            accumulators: operations::normal_accumulators(rng),
         }
     }
 
@@ -86,13 +83,30 @@ impl<T: FloatLike, const ILP: usize> Benchmark for MulMaxBenchmark<T, ILP> {
 /// Lower bound that we impose on accumulator values
 ///
 /// Multiplying the accumulator by a subnormal number can produce a subnormal
-/// result, so we use a MAX to get back to normal range. The lower bound that
-/// this MAX imposes should also allow us to avoid subnormals when multiplying
-/// by normal numbers, so we want `lower_bound * 0.5 > T::MIN_POSITIVE`, i.e.
-/// `lower_bound > 2 * T::MIN_POSITIVE`.
+/// result, so we use a MAX to get back to normal range.
 ///
-/// On top of this fundamental limit, we add an x2 safety margin to protect
-/// ourselves against rounding issues in e.g. the input data generator.
+/// The lower bound that this MAX imposes should additionally ensure that the
+/// product of a subnormal number by the accumulator has a good chance of being
+/// a subnormal number other than 0, because some hardware has no issue with
+/// multiplications by a subnormal that lead to a normal or zero result.
+/// However, there is a tradeoff here:
+///
+/// - When the accumulator is exactly 1.0, the output is a subnormal number if
+///   and only if the input is one.
+/// - As the accumulator grows above 1.0, multiplying by some subnormal inputs
+///   leads to a normal output. This becomes always true once the accumulator
+///   grows above 2^T::MANTISSA_DIGITS.
+/// - As the accumulator shrinks below 1.0, multiplying by some subnormal inputs
+///   leads a zero output. This becomes always true once the accumulator shrinks
+///   below 2^-T::MANTISSA_DIGITS.
+/// - All other things being equal, it would be good to have a lower bound that
+///   constrains the accumulator as little as possible, so that the accumulator
+///   is allowed to explore more of the available range of values and has more
+///   room to grow before overflowing.
+///
+/// A lower bound that is at the multiplicative half-way point between 1.0 and
+/// 2^-T::MANTISSA_DIGITS seems like it strikes a good balance between these
+/// various concerns.
 fn lower_bound<T: FloatLike>() -> T {
-    T::splat(4.0) * T::MIN_POSITIVE
+    T::splat(2.0f32.powi(-(T::MANTISSA_DIGITS as i32) / 2))
 }

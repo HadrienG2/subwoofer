@@ -43,11 +43,8 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<T,
 
     #[inline]
     fn begin_run(self, rng: impl Rng) -> Self {
-        // We start close to the upper bound (at most 2x smaller). This gives us
-        // maximal headroom against hitting the T::MIN_POSITIVE underflow limit.
         Self {
-            accumulators: operations::normal_accumulators(rng)
-                .map(|acc: T| upper_bound::<T>() / (acc * T::splat(2.0)).sqrt()),
+            accumulators: operations::normal_accumulators(rng),
         }
     }
 
@@ -69,10 +66,10 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<T,
                 // - If elem is normal, this is effectively a multiplicative
                 //   random walk of step [0.5; 2[ with an upper bound
                 //   * It is a multiplicative random walk because the
-                //     distribution of input values is chosen to ensure that the
+                //     distribution of input values ensures that the
                 //     distribution of 1/elem is the same as that of elem, and
-                //     that repeatedly multiplying by elem results in a
-                //     multiplicative random walk.
+                //     also (as a result) that repeatedly multiplying by elem
+                //     results in a multiplicative random walk.
                 //   * The random walk has a low chance of going below
                 //     T::MIN_POSITIVE because input values are distributed in
                 //     such a way that there is an equal chance of having elem

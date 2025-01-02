@@ -85,20 +85,30 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<T, I
 /// Lower bound that we impose on accumulator values
 ///
 /// Dividing a subnormal number by our accumulator can produce a subnormal
-/// result, so we use a MAX to get back to normal range. The lower bound is
-/// chosen to ensure that...
+/// result, so we use a MAX to get back to normal range.
 ///
-/// - The resulting accumulator is a normal number, above `T::MIN_POSITIVE`.
-/// - `elem / acc` cannot overflow when acc is at this lower bound. Since `elem
-///   <= 2`, this means that we want `2 / lower_bound < T::MAX` i.e.
-///   `lower_bound > 2 / T::MAX`.
-/// - At this upper limit of the accumulator range `max_acc = 2 / lower_bound`,
-///   the `elem / acc` ratio should not underflow below `T::MIN_POSITIVE` when
-///   elem is normal. Since `elem >= 0.5` in that case, this requires `0.5 /
-///   max_acc > T::MIN_POSITIVE` i.e. `lower_bound > 4 * T::MIN_POSITIVE`.
+/// The lower bound that this MAX imposes should additionally ensure that the
+/// ratio of a subnormal number by the accumulator has a good chance of being a
+/// subnormal number other than 0, because some hardware has no issue with
+/// divisions that have a subnormal numerator but lead to a normal or zero
+/// result. However, there is a tradeoff here:
 ///
-/// We add a 2x safety margin on top of these limits to protect ourselves
-/// against rounding issues in e.g. the RNG we use.
+/// - When the accumulator is exactly 1.0, the output is a subnormal number if
+///   and only if the input is one.
+/// - As the accumulator grows above 1.0, dividing some subnormal inputs by the
+///   accumulator leads to a zero output. This becomes always true once the
+///   accumulator grows above 2^T::MANTISSA_DIGITS.
+/// - As the accumulator shrinks below 1.0, dividing some subnormal inputs by
+///   the accumulator leads to a normal output. This becomes always true once
+///   the accumulator shrinks below 2^-T::MANTISSA_DIGITS.
+/// - When we give the accumulator a lower bound, we also give it an upper
+///   bound: since elem cannot be higher than 2.0, given an initial accumulator
+///   value `acc`, the next accumulator value `elem / acc` cannot be higher than
+///   `2 / lower_bound`.
+///
+/// A lower bound that is at the multiplicative half-way point between 1.0 and
+/// 2^-T::MANTISSA_DIGITS seems like it strikes a good balance between these
+/// various concerns.
 fn lower_bound<T: FloatLike>() -> T {
-    (T::splat(8.0) * T::MIN_POSITIVE).fast_max(T::splat(4.0) / T::MAX)
+    T::splat(2.0f32.powi(-(T::MANTISSA_DIGITS as i32) / 2))
 }

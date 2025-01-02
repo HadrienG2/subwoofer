@@ -75,7 +75,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaAddendMaxBenchmark<T, ILP>
                 // - In the lower limit scenario where all inputs are subnormal
                 //   numbers, acc decays by virtue of being repeatedly
                 //   multiplied by `shrink < 1`, until it hits the minimum
-                //   imposed by lower_bound and stays there
+                //   imposed by `lower_bound` and stays there
                 // - In the upper limit scenario where `shrink` is 0.5 and all
                 //   inputs are close to 2, acc converges to `2 * sum(1/2^k)`,
                 //   which is `2 * 1/2` aka 1.
