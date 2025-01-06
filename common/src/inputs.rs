@@ -10,18 +10,12 @@ use rand::prelude::*;
 /// of subnormal inputs in the input data sequence.
 ///
 /// This is for example known to be the case for the `fma_full` benchmark on
-/// current Intel CPUs: since the trigger for subnormal slowdown on those CPUs
+/// current Intel CPUs. Since the trigger for subnormal slowdown on those CPUs
 /// is that at least one input to an instruction is subnormal, and two
-/// subnormals inputs do not increase overhead, an input data configuration for
-/// which half of the FMAs have all-normal inputs and half of the FMAs have
-/// all-subnormal inputs should be twice as fast as another configuration where
-/// all FMAs have one normal and one subnormal input.
-///
-/// Further, because the subnormal fallback of some hardware trashes the CPU
-/// frontend, we could also expect a Sufficiently Weird CPU Microarchitecture to
-/// have a subnormal-induced slowdown that varies depending on where in the
-/// input program the affected instructions are located, i.e. how close they are
-/// to the beginning or the end of a benchmark loop iteration in machine code.
+/// subnormals inputs do not increase overhead, it follows that an input data
+/// configuration for which half of the FMAs have all-normal inputs and half of
+/// the FMAs have all-subnormal inputs only has half the overhead of another
+/// configuration where all FMAs have one normal and one subnormal input.
 ///
 /// This means that to make the measured benchmark performance as reproducible
 /// as possible across `cargo bench` runs, we need to do two things:
@@ -32,16 +26,15 @@ use rand::prelude::*;
 ///   in the program gets all possible subnormal/normal input configurations
 ///   evenly covered, given enough criterion benchmark runs.
 ///
-/// The former is achieved by [`generate_positive()`], while the latter is
-/// achieved by an input reordering step between benchmark iteration batches.
-/// The [`FloatSet`]/[`FloatSequence`] dichotomy enforces such a reordering
-/// step.
+/// The former is achieved at the input generation stage (within module `inputs`
+/// of the main `subwoofer` crate), while the latter is achieved by an input
+/// reordering step between benchmark iteration batches. The
+/// [`FloatSet`]/[`FloatSequence`] dichotomy enforces such a reordering step.
 pub trait FloatSet: AsMut<[Self::Element]> {
     /// Floating-point elements that compose this set
     type Element: FloatLike;
 
-    /// Number of elements of this type inside of the set, accounting for
-    /// accumulator reuse
+    /// Number of operation inputs inside of the set, accounting for input reuse
     fn reused_len(&self, num_accumulators: usize) -> usize;
 
     /// Ordered sequence of inputs, borrowed from this set
@@ -50,7 +43,7 @@ pub trait FloatSet: AsMut<[Self::Element]> {
         Self: 'a;
 
     /// Generate a randomly ordered sequence of inputs from this set, hidden
-    /// from the optimizer and initially resident in CPU registers.
+    /// from the compiler's optimizer and initially resident in CPU registers.
     ///
     /// Implementations should be marked `#[inline]` to give the compiler more
     /// visibility of the data flow in the benchmark loop.

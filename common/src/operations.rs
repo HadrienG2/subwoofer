@@ -18,7 +18,7 @@ pub trait Operation<T: FloatLike>: Copy {
     ///
     /// This assumes the compiler does a perfect job at register allocation,
     /// which unfortunately is not always true, especially in the presence of
-    /// optimization barriers like `pessimize::hide()` that may have the
+    /// optimization barriers like [`pessimize::hide()`] that may have the
     /// side-effect of artificially increasing register pressure. But we
     /// tolerate a bit of spill to the stack if there's a lot more arithmetic.
     fn aux_registers_regop(input_registers: usize) -> usize;
