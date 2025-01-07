@@ -2,12 +2,12 @@
 
 use crate::{
     floats::FloatLike,
-    inputs::{FloatSequence, FloatSet},
+    inputs::{Inputs, InputsMut},
 };
 use rand::prelude::*;
 
 /// Floating-point operation that can be benchmarked
-pub trait Operation<T: FloatLike>: Copy {
+pub trait Operation: Copy {
     /// Name given to this operation in criterion benchmark outputs
     const NAME: &str;
 
@@ -23,68 +23,139 @@ pub trait Operation<T: FloatLike>: Copy {
     /// tolerate a bit of spill to the stack if there's a lot more arithmetic.
     fn aux_registers_regop(input_registers: usize) -> usize;
 
-    /// Like `AUX_REGISTERS_MEMOP`, but for memory operands
+    /// Like `aux_registers_regop`, but for memory operands
     const AUX_REGISTERS_MEMOP: usize;
 
-    /// Setup a benchmark with a certain degree of instruction-level parallelism
-    fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T>;
+    /// Setup a benchmark with some input storage & accumulation parallelism
+    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark;
 }
 //
 /// Microbenchmark of a certain [`Operation`]
-pub trait Benchmark: Copy {
-    /// Floating-point type that is being exercised
-    type Float: FloatLike;
-
+pub trait Benchmark {
     /// Number of hardware operations under study that this benchmark will
-    /// execute when processing a certain input dataset
+    /// execute when processing the previously specified input dataset
     ///
-    /// Most benchmarks consume one input element per operation, in which case
-    /// this will be [`inputs.reused_len(ilp)`](FloatSet::reused_len) with `ilp`
-    /// set to this benchmark's accumulation ILP. But beware of benchmarks like
-    /// fma_full which consume multiple inputs per operation.
-    fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize;
+    /// Most benchmarks consume one input element per computed operation, in
+    /// which case this will be [`inputs::accumulated_len(&input_storage,
+    /// ilp)`](crate::inputs::accumulated_len), with `input_storage` pointing to
+    /// the previously specified input storage and `ilp` set to this benchmark's
+    /// degree of accumulation instruction-level parallelism.
+    ///
+    /// However, beware of benchmarks like `fma_full` which consume multiple
+    /// input elements per computed operation.
+    fn num_operations(&self) -> usize;
 
-    /// Start a new benchmark run
+    /// Granularity of the amount of subnormal numbers in the input dataset
     ///
-    /// This is the point where a benchmark should initialize its internal
-    /// state: accumulators, growth factors, etc. Ideally, the state should be
-    /// fully regenerated from some suitable random distribution on each run to
-    /// avoid measurement bias linked to multiple runs with a the same initial
-    /// state. But if generating the state from an RNG is too expensive, a
-    /// reused state can be passed through [`pessimize::hide()`] instead.
+    /// The amount of subnormal numbers in the input dataset should be a
+    /// multiple of this granularity. Otherwise it will be rounded up or down to
+    /// a multiple of this granularity.
+    const SUBNORMAL_INPUT_GRANULARITY: usize;
+
+    /// Specify the desired share of subnormal numbers in the input dataset.
     ///
-    /// You will typically want to initialize your accumulators to one of
-    /// [`additive_accumulators()`] or [`normal_accumulators()`] here.
+    /// The specified `num_subnormals` subnormal count must be smaller than or
+    /// equal to the length of the underlying input storage.
+    ///
+    /// It should also be a multiple of `SUBNORMAL_INPUT_GRANULARITY`, otherwise
+    /// it will be rounded up or down to such a multiple.
+    ///
+    /// The benchmark can generate an input dataset as soon as this function has
+    /// been called. Whether it should do so right away during the call to this
+    /// function is debatable:
+    ///
+    /// - Small input sets should be regenerated on each call to `start_run()`
+    ///   in order to ensure that over Sufficiently Many runs, the benchmark is
+    ///   exposed to a fair share of all possible inputs. In that case, the
+    ///   value of `num_subnormals` should merely be cached by `setup_inputs()`
+    ///   for use by `start_run()`.
+    /// - Larger input sets are sufficiently representative of the space of all
+    ///   possible inputs that regenerating them on each benchmark run is
+    ///   overkill (and time-consuming). In that case, generating a single set
+    ///   of inputs during `setup_inputs()` and reusing it for each subsequent
+    ///   call to `start_run()` is fine. However, the position of subnormal
+    ///   numbers within the input data stream may still affect the performance
+    ///   of the CPU's floating-point primitives, so it remains a good idea to
+    ///   at least randomly shuffle inputs on each call to `start_run()`.
+    ///
+    /// Implementations of `Benchmark` are advised to use the provided
+    /// [`should_generate_every_run()`] utility to decide whether they should
+    /// fully regenerate their input data set on every run, or generate it
+    /// inside of `setup_inputs()` merely shuffle it inside of `start_run()`.
+    fn setup_inputs(&mut self, rng: &mut impl Rng, num_subnormals: usize);
+
+    /// Start a new benchmark run (= repeated passes through identical inputs)
+    ///
+    /// It is guaranteed that method `setup_inputs()` will be called at least
+    /// once before this function is first called.
+    ///
+    /// Ideally, all benchmark-relevant state should be fully regenerated from
+    /// some suitable random distribution on each run, in order to avoid
+    /// measurement bias linked to a particular choice of benchmark state.
+    ///
+    /// But if generating the state from an RNG has a cost that is comparable to
+    /// or higher than that of running the benchmark via `integrate_inputs()`,
+    /// then the following alternatives should be considered:
+    ///
+    /// - Keep the same values, but randomly shuffle them. This is good enough
+    ///   for relatively large sets of random values, like in-RAM input
+    ///   datasets, where there is no meaningful difference between a randomly
+    ///   reordered dataset and a fully regenerated one.
+    /// - Keep the same values, just pass them through [`pessimize::hide()`] so
+    ///   the compiler doesn't know that they are the same. This should be a
+    ///   last-resort option, as it maximizes measurement bias.
+    ///
+    /// You will normally want to initialize the accumulators to one of
+    /// [`additive_accumulators()`] or [`normal_accumulators()`] in this
+    /// function. The input storage of the resulting [`BenchmarkRun`] should be
+    /// derived from that of this benchmark through
+    /// [`clone_or_reborrow()`](InputStorage::clone_or_reborrow).
     ///
     /// Implementations should be marked `#[inline]` to give the compiler a more
     /// complete picture of the accumulator data flow.
-    fn begin_run(self, rng: impl Rng) -> Self;
+    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_>;
 
-    /// Integrate a new batch of inputs into the internal state
+    /// State of an ongoing execution of this benchmark
+    type Run<'run>: BenchmarkRun
+    where
+        Self: 'run;
+}
+//
+/// Ongoing execution of a certain [`Benchmark`]
+pub trait BenchmarkRun {
+    /// Floating-point type that is being exercised
+    type Float: FloatLike;
+
+    /// Integrate the input dataset into the inner accumulators
     ///
-    /// Inputs must be returned in a state suitable for reuse on the next
-    /// benchmark loop iteration. In most cases, they can just be left as-is,
-    /// but if the compiler can hoist computations out of the benchmark loop
-    /// under the knowledge that the inputs are always the same, then you will
-    /// have to pass inputs through a [`pessimize::hide()`] barrier, which may
-    /// come at the expense of less optimal codegen.
+    /// This will be repeatedly called, for an unknown number of times, so...
+    ///
+    /// - The sequence of inputs should be chosen such that after iterating over
+    ///   it, the benchmark accumulators either end up back at their starting
+    ///   point, or at least converge to a normal limit with properties that are
+    ///   similar to those of the starting point.
+    /// - Inputs should be passed through a strategically placed
+    ///   [`hide_inplace()`](InputStorage::hide_inplace) optimization barrier if
+    ///   there is any chance that the compiler may optimize under the knowledge
+    ///   that we are repeatedly running over the same inputs.
     ///
     /// If your benchmark sequentially feeds all inputs to a single accumulator,
-    /// you may use the provided [`integrate_full()`] skeleton to implement this
-    /// function. If your benchmark alternates between two different ways to
-    /// integrate inputs, you may use the provided [`integrate_halves()`]
-    /// skeleton to implement this function.
+    /// then you may use the provided [`integrate_full()`] skeleton to implement
+    /// this function. If your benchmark alternates between two different ways
+    /// to integrate inputs into accumulators, then you may use the provided
+    /// [`integrate_halves()`] skeleton to implement this function.
     ///
     /// In any case, you will also want to regularly pass accumulators through
     /// the provided [`hide_accumulators()`] function, otherwise the compiler
     /// will perform unwanted autovectorization and you will be unable to
-    /// compare scalar vs SIMD overhead.
+    /// compare scalar vs SIMD overhead. In more extreme cases where the
+    /// compiler is _strongly_ convinced that autovectorization is worthwhile,
+    /// you may even need to pass intermediary results through
+    /// [`hide_single_accumulator()`].
     ///
     /// Implementations must be marked `#[inline]` as this function will be
     /// called as part of the timed benchmark run.
-    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
-    where
-        Inputs: FloatSequence<Element = Self::Float>;
+    fn integrate_inputs(&mut self);
 
     /// Access the benchmark's data accumulators
     ///
@@ -96,6 +167,44 @@ pub trait Benchmark: Copy {
     fn accumulators(&self) -> &[Self::Float];
 }
 
+/// Truth that a benchmark should fully regenerate its input data set on every
+/// run, rather than generate it inside of `setup_inputs()` and merely reshuffle
+/// it inside of `start_run()`.
+///
+/// `num_subnormals` should be set to the number of subnormal values in the data
+/// stream. This number should be exact i.e. it should be a multiple of
+/// `SUBNORMAL_INPUT_GRANULARITY` for the corresponding benchmark.
+///
+/// `ilp` should be set to the number of accumulators that the benchmark uses
+/// (i.e. its degree of Instruction-Level-Parallelism).
+///
+/// `substreams_per_accumulator` should be set to the number of data streams
+/// that each accumulator feeds from.
+pub fn should_generate_every_run<I: Inputs>(
+    data: &I,
+    num_subnormals: usize,
+    ilp: usize,
+    substreams_per_accumulator: usize,
+) -> bool {
+    // Figure out which values are a minority, normal or subnormal
+    let num_minority_values = num_subnormals.min(data.as_ref().len() - num_subnormals);
+
+    // Figure out how many of them are fed to each accumulator on average
+    // (assuming normal/subnormal values are either randomly or evenly
+    // distributed between accumulators, which should be the case)
+    let mut values_per_acc = num_minority_values;
+    if !I::KIND.is_reused() {
+        values_per_acc /= ilp;
+    };
+
+    // Figure out how many values there are in a single input substream feeding
+    // a single accumulator. That's the part that needs to be varied enough.
+    let values_per_substream = values_per_acc / substreams_per_accumulator;
+
+    // If that is too small, request that inputs are regenerated each run
+    values_per_substream < 1000
+}
+
 /// Initialize accumulators with a positive value that is suitable as the
 /// starting point of an additive random walk of ~unity step.
 ///
@@ -104,10 +213,10 @@ pub trait Benchmark: Copy {
 /// - When many positive values are subtracted, it should not get close to zero
 /// - When many positive values are added, it should not saturate to a maximum
 #[inline]
-pub fn additive_accumulators<T: FloatLike, const ILP: usize>(mut rng: impl Rng) -> [T; ILP] {
+pub fn additive_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
     let normal_sampler = T::normal_sampler();
     std::array::from_fn::<_, ILP, _>(|_| {
-        T::splat(2.0f32.powi((T::MANTISSA_DIGITS / 2) as i32)) * normal_sampler(&mut rng)
+        T::splat(2.0f32.powi((T::MANTISSA_DIGITS / 2) as i32)) * normal_sampler(rng)
     })
 }
 
@@ -116,26 +225,26 @@ pub fn additive_accumulators<T: FloatLike, const ILP: usize>(mut rng: impl Rng) 
 /// This is the right default for most benchmarks, except those that perform an
 /// additive random walk.
 #[inline]
-pub fn normal_accumulators<T: FloatLike, const ILP: usize>(mut rng: impl Rng) -> [T; ILP] {
+pub fn normal_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
     let normal_sampler = T::normal_sampler();
-    std::array::from_fn::<_, ILP, _>(|_| normal_sampler(&mut rng))
+    std::array::from_fn::<_, ILP, _>(|_| normal_sampler(rng))
 }
 
 /// Benchmark skeleton that processes the full input homogeneously
 #[inline]
 pub fn integrate_full<
     T: FloatLike,
-    Inputs: FloatSequence<Element = T>,
+    I: Inputs<Element = T>,
     const ILP: usize,
     const HIDE_INPUTS: bool,
 >(
     accumulators: &mut [T; ILP],
     mut hide_accumulators: impl FnMut(&mut [T; ILP]),
-    inputs: &mut Inputs,
+    inputs: &mut I,
     mut iter: impl Copy + FnMut(T, T) -> T,
 ) {
     let inputs_slice = inputs.as_ref();
-    if Inputs::IS_REUSED {
+    if I::KIND.is_reused() {
         if HIDE_INPUTS {
             // When we need to hide inputs, we flip the order of iteration over
             // inputs and accumulators so that each set of inputs is fully
@@ -151,7 +260,7 @@ pub fn integrate_full<
                 for &elem in inputs.as_ref() {
                     *acc = iter(*acc, elem);
                 }
-                <Inputs as FloatSequence>::hide_inplace(inputs);
+                inputs.hide_inplace();
             }
             hide_accumulators(accumulators);
         } else {
@@ -179,13 +288,13 @@ pub fn integrate_full<
 
 /// Benchmark skeleton that treats each half of the input differently
 #[inline]
-pub fn integrate_halves<T: FloatLike, Inputs: FloatSequence<Element = T>, const ILP: usize>(
+pub fn integrate_halves<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
-    inputs: &Inputs,
+    inputs: &I,
     mut low_iter: impl Copy + FnMut(T, T) -> T,
     mut high_iter: impl Copy + FnMut(T, T) -> T,
 ) {
-    if Inputs::IS_REUSED {
+    if I::KIND.is_reused() {
         // Otherwise, we just do the same as usual, but with input reuse
         let inputs_slice = inputs.as_ref();
         let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);

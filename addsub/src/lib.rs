@@ -1,8 +1,7 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
-    floats::FloatLike,
-    inputs::{FloatSequence, FloatSet},
-    operations::{self, Benchmark, Operation},
+    inputs::{self, AddSubInputs, Inputs, InputsMut},
+    operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
 
@@ -10,7 +9,7 @@ use rand::Rng;
 #[derive(Clone, Copy)]
 pub struct AddSub;
 //
-impl<T: FloatLike> Operation<T> for AddSub {
+impl Operation for AddSub {
     const NAME: &str = "addsub";
 
     fn aux_registers_regop(_input_registers: usize) -> usize {
@@ -20,51 +19,82 @@ impl<T: FloatLike> Operation<T> for AddSub {
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
-        AddSubBenchmark {
-            accumulators: [Default::default(); ILP],
+    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+        AddSubBenchmark::<_, ILP> {
+            input_storage: AddSubInputs::from(input_storage),
+            num_subnormals: None,
         }
     }
 }
 
 /// [`Benchmark`] of [`AddSub`]
-#[derive(Clone, Copy)]
-struct AddSubBenchmark<T: FloatLike, const ILP: usize> {
-    accumulators: [T; ILP],
+struct AddSubBenchmark<Storage: InputsMut, const ILP: usize> {
+    input_storage: AddSubInputs<Storage>,
+    num_subnormals: Option<usize>,
 }
 //
-impl<T: FloatLike, const ILP: usize> Benchmark for AddSubBenchmark<T, ILP> {
-    type Float = T;
-
-    fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize {
-        inputs.reused_len(ILP)
+impl<Storage: InputsMut, const ILP: usize> Benchmark for AddSubBenchmark<Storage, ILP> {
+    fn num_operations(&self) -> usize {
+        inputs::accumulated_len(&self.input_storage, ILP)
     }
 
-    #[inline]
-    fn begin_run(self, rng: impl Rng) -> Self {
-        // This is just a random additive walk of ~unity or subnormal step, so
-        // given a high enough starting point, an initially normal accumulator
-        // should stay in the normal range forever.
-        Self {
-            accumulators: operations::additive_accumulators(rng),
+    const SUBNORMAL_INPUT_GRANULARITY: usize = 2;
+
+    fn setup_inputs(&mut self, rng: &mut impl Rng, num_subnormals: usize) {
+        // Decide whether to generate inputs now or every run
+        if operations::should_generate_every_run(&self.input_storage, num_subnormals, ILP, 2) {
+            self.num_subnormals = Some(num_subnormals);
+        } else {
+            self.input_storage.generate(rng, num_subnormals);
+            self.num_subnormals = None;
         }
     }
 
     #[inline]
-    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
+    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+        // Generate inputs if needed, otherwise just shuffle them around
+        if let Some(num_subnormals) = self.num_subnormals {
+            self.input_storage.generate(rng, num_subnormals);
+        } else {
+            self.input_storage.shuffle(rng);
+        }
+
+        // This is just a random additive walk of ~unity or subnormal step, so
+        // given a high enough starting point, an initially normal accumulator
+        // should stay in the normal range forever.
+        AddSubRun {
+            inputs: self.input_storage.freeze(),
+            accumulators: operations::additive_accumulators(rng),
+        }
+    }
+
+    type Run<'run>
+        = AddSubRun<Storage::Frozen<'run>, ILP>
     where
-        Inputs: FloatSequence<Element = T>,
-    {
+        Self: 'run;
+}
+
+/// [`BenchmarkRun`] of [`AddSubBenchmark`]
+struct AddSubRun<Storage: Inputs, const ILP: usize> {
+    inputs: AddSubInputs<Storage>,
+    accumulators: [Storage::Element; ILP],
+}
+//
+impl<Storage: Inputs, const ILP: usize> BenchmarkRun for AddSubRun<Storage, ILP> {
+    type Float = Storage::Element;
+
+    #[inline]
+    fn integrate_inputs(&mut self) {
         operations::integrate_halves(
             &mut self.accumulators,
-            inputs,
+            &self.inputs,
             |acc, elem| acc + elem,
             |acc, elem| acc - elem,
         );
     }
 
     #[inline]
-    fn accumulators(&self) -> &[T] {
+    fn accumulators(&self) -> &[Storage::Element] {
         &self.accumulators
     }
 }

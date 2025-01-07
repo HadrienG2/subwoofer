@@ -103,16 +103,43 @@ pub(crate) fn benchmark_memory<B: Benchmark>(
     }
 }
 
-/// Fill a buffer with positive normal and subnormal inputs
+/// Fill the `set` slice with `num_subsets` interleaved substreams of positive
+/// normal/subnormal inputs of type `T`
+///
+/// The `set` slice is first conceptually split into `num_subsets` interleaved
+/// data streams. For example, if `num_subsets` is 2 then `set[0]`, `set[2]`,
+/// `set[4]`, ... are treated as belonging to a first data stream and `set[1]`,
+/// `set[3]`, `set[5]`, ... are treated as belonging to a second data stream.
+///
+/// We then evenly distribute `approx_subnormals` subnormal inputs across these
+/// data streams, rounding `approx_subnormals` up or down to the nearest
+/// multiple of `num_subsets` so that each data stream contains the same number
+/// of subnormal inputs. These subnormal inputs will be drawn from the
+/// `T::subnormal_sampler()` distribution.
+///
+/// The remaining elements of each subset are then chosen to ensure that an
+/// accumulator that starts close to unity and has sufficient dynamic range
+/// exhibits periodic behavior when repeatedly multiplied or divided by the full
+/// set of inputs in any order:
+///
+/// - Half of them are randomly drawn from the `T::normal_sampler()`
+///   distribution.
+/// - The other half is chosen such that the product of all normal numbers in
+///   the data stream is exactly 1.0.
 ///
 /// The order of normal vs subnormal inputs is not randomized yet, this will be
 /// taken care of by
 /// [`make_sequence()`](common::inputs::FloatSet::make_sequence()) later on.
-fn generate_positive<T: FloatLike, R: Rng>(set: &mut [T], rng: &mut R, num_subnormals: usize) {
+fn generate_positive<T: FloatLike>(
+    set: &mut [T],
+    num_subsets: usize,
+    rng: &mut impl Rng,
+    approx_subnormals: usize,
+) {
     // Generate subnormal inputs
     assert!(num_subnormals <= set.len());
     let (subnormal_target, normal_target) = set.split_at_mut(num_subnormals);
-    let subnormal = T::subnormal_sampler::<R>();
+    let subnormal = T::subnormal_sampler();
     for target in subnormal_target {
         *target = subnormal(rng);
     }
@@ -121,7 +148,7 @@ fn generate_positive<T: FloatLike, R: Rng>(set: &mut [T], rng: &mut R, num_subno
     if normal_target.is_empty() {
         return;
     }
-    let normal = T::normal_sampler::<R>();
+    let normal = T::normal_sampler();
     let num_normals = normal_target.len();
     let (random, inverses) = normal_target.split_at_mut(num_normals / 2);
     for elem in random.iter_mut() {
@@ -153,7 +180,7 @@ pub fn run_benchmark<B: Benchmark>(
     group: &mut BenchmarkGroup<WallTime>,
     mut inputs: impl FloatSet<Element = B::Float>,
     input_name: String,
-    mut rng: impl Rng,
+    rng: &mut impl Rng,
 ) {
     group.throughput(Throughput::Elements(B::num_operations(&inputs) as u64));
     group.bench_function(input_name, move |b| {
@@ -166,20 +193,19 @@ pub fn run_benchmark<B: Benchmark>(
             // - Inputs are randomly reordered from one batch to another, which
             //   will avoid input order-related hardware bias if criterion runs
             //   enough batches (as it does in its default configuration).
-            let mut benchmark = benchmark.begin_run(&mut rng);
-            let mut inputs = inputs.make_sequence(&mut rng);
+            let mut run = benchmark.start_run(rng);
 
             // Timed region, this is the danger zone where inlining and compiler
             // optimizations must be reviewed very carefully.
             let start = Instant::now();
             for _ in 0..iters {
-                benchmark.integrate_inputs(&mut inputs);
+                run.integrate_inputs();
             }
             let elapsed = start.elapsed();
 
             // Tell the compiler that the accumulated results are used so it
             // doesn't delete the computation
-            for acc in benchmark.accumulators() {
+            for acc in run.accumulators() {
                 pessimize::consume::<B::Float>(*acc);
             }
             elapsed
