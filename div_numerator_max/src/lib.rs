@@ -46,7 +46,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<T, I
     #[inline]
     fn begin_run(self, rng: impl Rng) -> Self {
         Self {
-            accumulators: operations::normal_accumulators(rng),
+            accumulators: operations::narrow_accumulators(rng),
         }
     }
 

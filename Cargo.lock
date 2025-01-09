@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "addsub"
+name = "add"
 version = "1.0.0"
 dependencies = [
  "common",
@@ -672,7 +672,7 @@ dependencies = [
 name = "subwoofer"
 version = "1.0.0"
 dependencies = [
- "addsub",
+ "add",
  "common",
  "criterion",
  "div_denominator_min",

@@ -1,6 +1,9 @@
 //! Benchmark input datasets
 
-use crate::floats::FloatLike;
+use crate::{
+    arch::MIN_FLOAT_REGISTERS,
+    floats::{self, FloatLike},
+};
 use rand::prelude::*;
 
 /// Owned or borrowed ordered set of benchmark inputs
@@ -154,174 +157,156 @@ impl<'buffer, T: FloatLike> Inputs for &'buffer mut [T] {
 //
 impl<T: FloatLike> InputsMut for &mut [T] {}
 
-/// Specialized [`InputStorage`] wrapper for `addsub`-like benchmarks
+/// Generate a mixture of normal and subnormal inputs for a benchmark that
+/// follows the `acc -> acc + input * constant` pattern where `constant` is a
+/// positive number in the usual "narrow" range `[0.5; 2[`, and it is assumed
+/// that the accumulator is initially in that same range.
 ///
-/// The `addsub` benchmark works by splitting the input dataset in two halves,
-/// then iterating over pairs of elements from both halves, adding one element
-/// to the accumulator then subtracting the other element.
+/// Overall, every time we add a normal value to the accumulator, we subtract it
+/// back on the next normal input, thusly restoring the accumulator to its
+/// initial value for the next iteration.
 ///
-/// It is closely related to the `fma_multiplier_bidi` benchmark, which works
-/// almost identically except all input values are multiplied by a constant
-/// coefficient before being added to the accumulator or subtracted from it.
-///
-/// In those benchmarks, we can preserve the accumulator value over an
-/// infinitely large number of iterations by imposing the following:
-///
-/// - The accumulator has a non-pathological initial value, not so big as to
-///   cause overflow when adding an input and not so small as to cause underflow
-///   when subtracting an input.
-/// - Either the number of values in the input data stream is even, or the extra
-///   element in one of the input data stream halves is set to zero so that it
-///   does not affect the accumulator it is summed into.
-/// - Ignoring the possibly zeroed element, the resulting equal-length halves of
-///   the input data stream are identical.
-///   * This entails that the number of subnormal elements in the input data
-///     stream must be forced even, so that we can equally spread subnormal
-///     elements on both sides of the input data stream.
-///
-/// This [`InputStorage`] wrapper enforces these properties at input generation
-/// time, and lets you shuffle its elements in a manner which preserves them.
-pub struct AddSubInputs<Storage: Inputs> {
-    /// Inner data store
-    storage: Storage,
-
-    /// Truth that `generate()` has been called at least once
-    generated: bool,
-}
-//
-impl<Storage: InputsMut> AddSubInputs<Storage> {
-    /// Wrap an [`InputStorage`] impl for use in an `addsub`-like benchmark
-    pub fn new(storage: Storage) -> Self {
-        Self {
-            storage,
-            generated: false,
-        }
-    }
-
-    /// Fill inner dataset with about `approx_subnormals` subnormal elements
-    pub fn generate(&mut self, rng: &mut impl Rng, approx_subnormals: usize) {
-        // Validate input arguments
-        assert!(approx_subnormals <= self.storage.as_ref().len());
-
-        // Perform left/right/extra split, zero out extra on first run
-        let generated = self.generated;
-        let (left, right, extra) = self.split_storage();
-        if !generated {
-            if let Some(extra) = extra {
-                *extra = Storage::Element::splat(0.0);
-            }
-        }
-
-        // Fill the left half with the desired share of normals/subnormals...
-        generate_mixture_ordered(left, rng, approx_subnormals);
-
-        // ...and fill the right half with identical values
-        right.copy_from_slice(left);
-
-        // Record that the inner storage now contains valid inputs...
-        self.generated = true;
-
-        // ...and apply the same random permutation to both halves
-        self.shuffle(rng);
-    }
-
-    /// Shuffle inner dataset in a manner that preserves the desired properties
-    pub fn shuffle(&mut self, rng: &mut impl Rng) {
-        assert!(self.generated);
-        let (left, right, _extra) = self.split_storage();
-        assert_eq!(left.len(), right.len());
-        for dest_idx in (1..left.len()).rev() {
-            // Apply the Durstenfeld variant of the Fisher-Yates shuffle, using
-            // the same permutation for the left and right halves of the dataset
-            let source_idx = rng.gen_range(0..=dest_idx);
-            left.swap(source_idx, dest_idx);
-            right.swap(source_idx, dest_idx);
-        }
-    }
-
-    /// Split the dataset in two equally sized halves + maybe one extra element
-    #[allow(clippy::type_complexity)]
-    fn split_storage(
-        &mut self,
-    ) -> (
-        &mut [Storage::Element],
-        &mut [Storage::Element],
-        Option<&mut Storage::Element>,
-    ) {
-        let storage = self.storage.as_mut();
-        let half_len = storage.len() / 2;
-        let (left, right) = storage.split_at_mut(half_len);
-        if left.len() == right.len() {
-            (left, right, None)
-        } else {
-            assert_eq!(right.len(), left.len() + 1);
-            let (rightmost, other_right) = right.split_last_mut().unwrap();
-            (left, other_right, Some(rightmost))
-        }
-    }
-}
-//
-impl<Storage: Inputs> AsRef<[Storage::Element]> for AddSubInputs<Storage> {
-    fn as_ref(&self) -> &[Storage::Element] {
-        self.storage.as_ref()
-    }
-}
-//
-impl<Storage: Inputs> Inputs for AddSubInputs<Storage> {
-    type Element = Storage::Element;
-
-    const KIND: InputKind = Storage::KIND;
-
-    #[inline]
-    fn hide_inplace(&mut self) {
-        self.storage.hide_inplace()
-    }
-
-    fn freeze(&mut self) -> Self::Frozen<'_> {
-        AddSubInputs {
-            storage: self.storage.freeze(),
-            generated: self.generated,
-        }
-    }
-
-    type Frozen<'parent>
-        = AddSubInputs<Storage::Frozen<'parent>>
-    where
-        Self: 'parent;
-}
-//
-impl<Storage: InputsMut> From<Storage> for AddSubInputs<Storage> {
-    fn from(storage: Storage) -> Self {
-        Self::new(storage)
-    }
-}
-
-/// Fill up a slice with a certain share of normal and subnormal numbers
-pub fn generate_mixture<T: FloatLike>(target: &mut [T], rng: &mut impl Rng, num_subnormals: usize) {
-    generate_mixture_ordered(target, rng, num_subnormals);
-    target.shuffle(rng);
-}
-
-/// Like `generated_mixture`, but does not randomize the location of normal and
-/// subnormal values in the input.
-///
-/// Such a shuffling step is needed before the resulting slice is suitable for
-/// use as the input to a benchmark. Yet this lower-level function is sometimes
-/// needed because some benchmarks need data to be shuffled in a way that is
-/// more elaborate than `target.shuffle(rng)`.
-pub fn generate_mixture_ordered<T: FloatLike>(
-    target: &mut [T],
+/// The normal inputs will be of magnitude `[0.5; 2[`, alternating between a
+/// positive and negative sign, except for the last input which may be `0.0` in
+/// order to guarantee that the value of the accumulator at the end of a
+/// benchmark run is back to where it was at the beginning.
+pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
+    target: &mut Storage,
     rng: &mut impl Rng,
     num_subnormals: usize,
 ) {
+    // Determine how many interleaved input data streams should be generated...
+    let num_data_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
+    inner(target.as_mut(), rng, num_subnormals, num_data_streams);
+    //
+    // ...and dispatch accordingly to a less generic version of this function,
+    // to reduce build time at an insignifiant runtime performance cost
+    fn inner<T: FloatLike, R: Rng>(
+        target: &mut [T],
+        rng: &mut R,
+        num_subnormals: usize,
+        num_data_streams: usize,
+    ) {
+        // Decide if the next element of `target` should be subnormal
+        let mut pick_subnormal = subnormal_picker(target.len(), num_subnormals);
+
+        // Position and value of previous normal inputs that we need to recover
+        // from by subtracting them back from the corresponding accumulator
+        #[derive(Clone, Copy)]
+        struct PrevNormal<T: FloatLike> {
+            idx: usize,
+            value: T,
+        }
+        let mut prev_normals = [None; MIN_FLOAT_REGISTERS];
+        assert!(num_data_streams < prev_normals.len());
+        let prev_normals = &mut prev_normals[..num_data_streams];
+
+        // Generate an input element, knowing the associated PrevNormal state
+        // for the corresponding accumulator
+        let mut idx = 0;
+        let normal = floats::narrow_sampler::<T, R>();
+        let subnormal = floats::subnormal_sampler::<T, R>();
+        let mut generate_element = |prev_normal: &mut Option<PrevNormal<T>>| {
+            let value = if pick_subnormal(rng) {
+                // Subnormals do not change the accumulator (because their
+                // magnitude is so much lower) and can be ignored
+                subnormal(rng)
+            } else {
+                match prev_normal.take() {
+                    // If we previously added a value, subtract it back
+                    Some(PrevNormal { idx: _, value }) => -value,
+
+                    // Otherwise, generate a normal value and take note of the
+                    // fact that we'll need to subtract it later on.
+                    None => {
+                        let value = normal(rng);
+                        *prev_normal = Some(PrevNormal { idx, value });
+                        value
+                    }
+                }
+            };
+            idx += 1;
+            value
+        };
+
+        // Generate input data
+        let mut target_chunks = target.chunks_exact_mut(num_data_streams);
+        for chunk in target_chunks.by_ref() {
+            for (target, prev_normal) in chunk.iter_mut().zip(prev_normals.iter_mut()) {
+                *target = generate_element(prev_normal);
+            }
+        }
+        for (target, prev_normal) in target_chunks
+            .into_remainder()
+            .iter_mut()
+            .zip(prev_normals.iter_mut())
+        {
+            *target = generate_element(prev_normal);
+        }
+
+        // The last normal input cannot be canceled out, so zero it out instead
+        let zero = T::splat(0.0);
+        for prev_normal in prev_normals {
+            if let Some(PrevNormal { idx, value: _ }) = *prev_normal {
+                target[idx] = zero;
+            }
+        }
+    }
+}
+
+// TODO: Implement a generate_mul_max_inputs that starts from a copy-paste of
+//       generate_add_inputs, then modifies what's needed. Then extract any
+//       implementation commonalities. Then do the same with
+//       generate_div_denominator_min_inputs, and again extract commonalities
+//       with mul_max. Finally do the same with
+//       generate_div_numerator_max_inputs. Finally, extract single-benchmark
+//       utilities to the crate of their respective benchmark.
+
+/// Generate a mixture of normal and subnormal inputs for a benchmark that
+/// follows the `acc -> max(acc, f(input))` pattern, where the accumulator is
+/// initially a normal number and f is a function that turns any normal number
+/// into another normal number.
+pub fn generate_max_inputs<T: FloatLike, R: Rng>(
+    target: &mut [T],
+    rng: &mut R,
+    num_subnormals: usize,
+) {
+    // Split the target slice into one part for normal numbers and another part
+    // for subnormal numbers
     assert!(num_subnormals <= target.len());
     let (subnormals, normals) = target.split_at_mut(num_subnormals);
-    let normal = T::normal_sampler();
-    let subnormal = T::subnormal_sampler();
+
+    // Generate the subnormal inputs
+    let subnormal = floats::subnormal_sampler();
     for elem in subnormals {
         *elem = subnormal(rng);
     }
+
+    // Generate the normal inputs
+    let normal = floats::normal_sampler();
     for elem in normals {
         *elem = normal(rng);
+    }
+
+    // Randomize the order of normal and subnormal inputs
+    target.shuffle(rng)
+}
+
+/// Random boolean distribution that iteratively tells if each element of a
+/// slice of future benchmark inputs of size `target_len` should be subnormal
+///
+/// Should be called exactly `target_len` times. Will yield `num_subnormals`
+/// times the value `true` and yield the value `false` the rest of the time.
+fn subnormal_picker<R: Rng>(
+    mut target_len: usize,
+    mut num_subnormals: usize,
+) -> impl FnMut(&mut R) -> bool {
+    move |rng| {
+        debug_assert!(target_len > 0);
+        let subnormal_pos = rng.gen_range(0..target_len);
+        let is_subnormal = subnormal_pos < num_subnormals;
+        target_len -= 1;
+        num_subnormals -= (is_subnormal) as usize;
+        is_subnormal
     }
 }

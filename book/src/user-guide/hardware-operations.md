@@ -32,13 +32,8 @@ operation of interest in isolation.
 Adding or subtracting a subnormal number to a normal number produces a normal
 number, therefore the overhead of ADD/SUB can be studied in isolation. Because
 these two operations have identical performance characteristics on all known
-hardware, we have a single `addsub` benchmark that measures the average of the
-performances of ADD and SUB, which should be equal to the performance of either
-ADD or SUB in isolation.
-
-The resulting benchmark design allows us to easily ensure that the underlying
-accumulator does not experience unbounded growth, which would eventually take it
-to infinity.
+hardware, we have a single `add` benchmark that measures the average of ADD
+only.
 
 ## MIN/MAX
 
@@ -110,11 +105,10 @@ inputs of operation N+1. This is what we chose:
 
 * In benchmark `fma_multiplier_bidi`, the input data is fed to a multiplier
   argment of the FMA, multiplied by a constant factor, and alternatively added
-  and subtracted from an accumulator. This is effectively the same as the
-  `addsub` benchmark, just with a larger or smaller step, so for this pattern we
-  can study the overhead of FMA with possibly subnormal multipliers in
-  isolation, without taking corrective action to guard against non-normal
-  outputs.
+  and subtracted from an accumulator. This is effectively the same as the `add`
+  benchmark, just with a larger or smaller step, so for this pattern we can
+  study the overhead of FMA with possibly subnormal multipliers in isolation,
+  without taking corrective action to guard against non-normal outputs.
 * In benchmark `fma_addend_max`, input data is fed to the addend argument of the
   FMA, and we add to it the current accumulator multiplied by a constant factor.
   The result then becomes the next accumulator. Unfortunately, depending on how

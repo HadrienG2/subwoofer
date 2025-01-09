@@ -30,8 +30,8 @@ pub(crate) struct TypeConfiguration<'criterion, 'memory_inputs, 'memory_input_na
 /// Benchmark all enabled operations for a certain data type
 #[inline(never)] // Faster build + easier profiling
 pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
-    #[cfg(feature = "bench_addsub")]
-    benchmark_operation::<_, addsub::AddSub>(&mut config);
+    #[cfg(feature = "bench_add")]
+    benchmark_operation::<_, add::Add>(&mut config);
     #[cfg(feature = "bench_max")]
     benchmark_operation::<_, max::Max>(&mut config);
     #[cfg(feature = "bench_mul_max")]

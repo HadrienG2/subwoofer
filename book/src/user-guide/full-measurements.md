@@ -37,7 +37,7 @@ already know with unnecessary extra precision.
 
 Here's how to decide which benchmarks you can disable:
 
-- If one of the `addsub`, `sqrt_positive_max`, `div_denominator_min` and
+- If one of the `add`, `sqrt_positive_max`, `div_denominator_min` and
   `div_numerator_max` benchmarks was not affected by subnormals during the basic
   check, then you can disable it during the full measurement.
 - If the `fma_full_max_mul` benchmark was not affected by subnormals during the
@@ -47,7 +47,7 @@ Here's how to decide which benchmarks you can disable:
   by subnormals, you can disable the `mul_max` benchmark during the full
   measurement.
 - You **cannot** disable the `max` benchmark during the full measurement
-  **unless** no benchmark other than `addsub` was affected by subnormals.
+  **unless** no benchmark other than `add` was affected by subnormals.
 
 If you are in one of those cases, then you may want to stop using the catch-all
 `measure` Cargo feature, and instead use finer-grained Cargo features that let

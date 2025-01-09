@@ -52,29 +52,18 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for MaxBenchmark<Storage, I
         inputs::accumulated_len(&self.input_storage, ILP)
     }
 
-    const SUBNORMAL_INPUT_GRANULARITY: usize = 1;
-
-    fn setup_inputs(&mut self, rng: &mut impl Rng, num_subnormals: usize) {
-        // Decide whether to generate inputs now or every run
-        if operations::should_generate_every_run(&self.input_storage, num_subnormals, ILP, 1) {
-            self.num_subnormals = Some(num_subnormals);
-        } else {
-            inputs::generate_mixture(self.input_storage.as_mut(), rng, num_subnormals);
-            self.num_subnormals = None;
-        }
+    fn setup_inputs(&mut self, num_subnormals: usize) {
+        self.num_subnormals = Some(num_subnormals);
     }
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        // Generate inputs if needed, otherwise just shuffle them around
-        if let Some(num_subnormals) = self.num_subnormals {
-            inputs::generate_mixture(self.input_storage.as_mut(), rng, num_subnormals);
-        } else {
-            self.input_storage.as_mut().shuffle(rng);
-        }
-
-        // For this benchmark, the initial value of accumulators does not
-        // matter, as long as it is normal.
+        inputs::generate_max_inputs(
+            self.input_storage.as_mut(),
+            rng,
+            self.num_subnormals
+                .expect("setup_inputs should have been called first"),
+        );
         MaxRun {
             inputs: self.input_storage.freeze(),
             accumulators: operations::normal_accumulators(rng),
@@ -100,7 +89,7 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for MaxRun<I, ILP> {
     fn integrate_inputs(&mut self) {
         // No need to hide inputs for this benchmark, the compiler can't exploit
         // its knowledge that inputs are being reused.
-        operations::integrate_full::<_, _, ILP, false>(
+        operations::integrate::<_, _, ILP, false>(
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, true>,
             &mut self.inputs,

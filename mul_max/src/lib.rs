@@ -44,7 +44,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for MulMaxBenchmark<T, ILP> {
     #[inline]
     fn begin_run(self, rng: impl Rng) -> Self {
         Self {
-            accumulators: operations::normal_accumulators(rng),
+            accumulators: operations::narrow_accumulators(rng),
         }
     }
 

@@ -1,7 +1,7 @@
 //! Benchmark inner loops and associated types
 
 use crate::{
-    floats::FloatLike,
+    floats::{self, FloatLike},
     inputs::{Inputs, InputsMut},
 };
 use rand::prelude::*;
@@ -45,44 +45,11 @@ pub trait Benchmark {
     /// input elements per computed operation.
     fn num_operations(&self) -> usize;
 
-    /// Granularity of the amount of subnormal numbers in the input dataset
-    ///
-    /// The amount of subnormal numbers in the input dataset should be a
-    /// multiple of this granularity. Otherwise it will be rounded up or down to
-    /// a multiple of this granularity.
-    const SUBNORMAL_INPUT_GRANULARITY: usize;
-
     /// Specify the desired share of subnormal numbers in the input dataset.
     ///
     /// The specified `num_subnormals` subnormal count must be smaller than or
     /// equal to the length of the underlying input storage.
-    ///
-    /// It should also be a multiple of `SUBNORMAL_INPUT_GRANULARITY`, otherwise
-    /// it will be rounded up or down to such a multiple.
-    ///
-    /// The benchmark can generate an input dataset as soon as this function has
-    /// been called. Whether it should do so right away during the call to this
-    /// function is debatable:
-    ///
-    /// - Small input sets should be regenerated on each call to `start_run()`
-    ///   in order to ensure that over Sufficiently Many runs, the benchmark is
-    ///   exposed to a fair share of all possible inputs. In that case, the
-    ///   value of `num_subnormals` should merely be cached by `setup_inputs()`
-    ///   for use by `start_run()`.
-    /// - Larger input sets are sufficiently representative of the space of all
-    ///   possible inputs that regenerating them on each benchmark run is
-    ///   overkill (and time-consuming). In that case, generating a single set
-    ///   of inputs during `setup_inputs()` and reusing it for each subsequent
-    ///   call to `start_run()` is fine. However, the position of subnormal
-    ///   numbers within the input data stream may still affect the performance
-    ///   of the CPU's floating-point primitives, so it remains a good idea to
-    ///   at least randomly shuffle inputs on each call to `start_run()`.
-    ///
-    /// Implementations of `Benchmark` are advised to use the provided
-    /// [`should_generate_every_run()`] utility to decide whether they should
-    /// fully regenerate their input data set on every run, or generate it
-    /// inside of `setup_inputs()` merely shuffle it inside of `start_run()`.
-    fn setup_inputs(&mut self, rng: &mut impl Rng, num_subnormals: usize);
+    fn setup_inputs(&mut self, num_subnormals: usize);
 
     /// Start a new benchmark run (= repeated passes through identical inputs)
     ///
@@ -95,7 +62,7 @@ pub trait Benchmark {
     ///
     /// But if generating the state from an RNG has a cost that is comparable to
     /// or higher than that of running the benchmark via `integrate_inputs()`,
-    /// then the following alternatives should be considered:
+    /// then the following alternatives may be considered:
     ///
     /// - Keep the same values, but randomly shuffle them. This is good enough
     ///   for relatively large sets of random values, like in-RAM input
@@ -105,10 +72,12 @@ pub trait Benchmark {
     ///   the compiler doesn't know that they are the same. This should be a
     ///   last-resort option, as it maximizes measurement bias.
     ///
-    /// You will normally want to initialize the accumulators to one of
-    /// [`additive_accumulators()`] or [`normal_accumulators()`] in this
-    /// function. The input storage of the resulting [`BenchmarkRun`] should be
-    /// derived from that of this benchmark through
+    /// You will normally want to initialize the accumulators using
+    /// [`narrow_accumulators()`] in this function, but sometimes you can go for
+    /// the maximally general [`normal_accumulators()`].
+    ///
+    /// The input storage of the resulting [`BenchmarkRun`] should be derived
+    /// from that of this benchmark through
     /// [`clone_or_reborrow()`](InputStorage::clone_or_reborrow).
     ///
     /// Implementations should be marked `#[inline]` to give the compiler a more
@@ -167,72 +136,23 @@ pub trait BenchmarkRun {
     fn accumulators(&self) -> &[Self::Float];
 }
 
-/// Truth that a benchmark should fully regenerate its input data set on every
-/// run, rather than generate it inside of `setup_inputs()` and merely reshuffle
-/// it inside of `start_run()`.
-///
-/// `num_subnormals` should be set to the number of subnormal values in the data
-/// stream. This number should be exact i.e. it should be a multiple of
-/// `SUBNORMAL_INPUT_GRANULARITY` for the corresponding benchmark.
-///
-/// `ilp` should be set to the number of accumulators that the benchmark uses
-/// (i.e. its degree of Instruction-Level-Parallelism).
-///
-/// `substreams_per_accumulator` should be set to the number of data streams
-/// that each accumulator feeds from.
-pub fn should_generate_every_run<I: Inputs>(
-    data: &I,
-    num_subnormals: usize,
-    ilp: usize,
-    substreams_per_accumulator: usize,
-) -> bool {
-    // Figure out which values are a minority, normal or subnormal
-    let num_minority_values = num_subnormals.min(data.as_ref().len() - num_subnormals);
-
-    // Figure out how many of them are fed to each accumulator on average
-    // (assuming normal/subnormal values are either randomly or evenly
-    // distributed between accumulators, which should be the case)
-    let mut values_per_acc = num_minority_values;
-    if !I::KIND.is_reused() {
-        values_per_acc /= ilp;
-    };
-
-    // Figure out how many values there are in a single input substream feeding
-    // a single accumulator. That's the part that needs to be varied enough.
-    let values_per_substream = values_per_acc / substreams_per_accumulator;
-
-    // If that is too small, request that inputs are regenerated each run
-    values_per_substream < 1000
-}
-
-/// Initialize accumulators with a positive value that is suitable as the
-/// starting point of an additive random walk of ~unity step.
-///
-/// The chosen initial value takes a half-way compromise between two objectives:
-///
-/// - When many positive values are subtracted, it should not get close to zero
-/// - When many positive values are added, it should not saturate to a maximum
+/// Initialize accumulators with a random positive value in range [0.5; 2[
 #[inline]
-pub fn additive_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
-    let normal_sampler = T::normal_sampler();
-    std::array::from_fn::<_, ILP, _>(|_| {
-        T::splat(2.0f32.powi((T::MANTISSA_DIGITS / 2) as i32)) * normal_sampler(rng)
-    })
+pub fn narrow_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
+    let narrow = floats::narrow_sampler();
+    std::array::from_fn::<_, ILP, _>(|_| narrow(rng))
 }
 
-/// Initialize accumulators with a positive value close to 1.0
-///
-/// This is the right default for most benchmarks, except those that perform an
-/// additive random walk.
+/// Initialize accumulators with a random normal positive value
 #[inline]
 pub fn normal_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
-    let normal_sampler = T::normal_sampler();
-    std::array::from_fn::<_, ILP, _>(|_| normal_sampler(rng))
+    let normal = floats::normal_sampler();
+    std::array::from_fn::<_, ILP, _>(|_| normal(rng))
 }
 
 /// Benchmark skeleton that processes the full input homogeneously
 #[inline]
-pub fn integrate_full<
+pub fn integrate<
     T: FloatLike,
     I: Inputs<Element = T>,
     const ILP: usize,
@@ -282,53 +202,6 @@ pub fn integrate_full<
         }
         for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
             *acc = iter(*acc, elem);
-        }
-    }
-}
-
-/// Benchmark skeleton that treats each half of the input differently
-#[inline]
-pub fn integrate_halves<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
-    accumulators: &mut [T; ILP],
-    inputs: &I,
-    mut low_iter: impl Copy + FnMut(T, T) -> T,
-    mut high_iter: impl Copy + FnMut(T, T) -> T,
-) {
-    if I::KIND.is_reused() {
-        // Otherwise, we just do the same as usual, but with input reuse
-        let inputs_slice = inputs.as_ref();
-        let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
-        assert_eq!(low_inputs.len(), high_inputs.len());
-        for (&low_elem, &high_elem) in low_inputs.iter().zip(high_inputs) {
-            for acc in accumulators.iter_mut() {
-                *acc = low_iter(*acc, low_elem);
-                *acc = high_iter(*acc, high_elem);
-            }
-            hide_accumulators::<_, ILP, true>(accumulators);
-        }
-    } else {
-        let inputs_slice = inputs.as_ref();
-        let (low_inputs, high_inputs) = inputs_slice.split_at(inputs_slice.len() / 2);
-        let low_chunks = low_inputs.chunks_exact(ILP);
-        let high_chunks = high_inputs.chunks_exact(ILP);
-        let low_remainder = low_chunks.remainder();
-        let high_remainder = high_chunks.remainder();
-        for (low_chunk, high_chunk) in low_chunks.zip(high_chunks) {
-            for ((&low_elem, &high_elem), acc) in low_chunk
-                .iter()
-                .zip(high_chunk.iter())
-                .zip(accumulators.iter_mut())
-            {
-                *acc = low_iter(*acc, low_elem);
-                *acc = high_iter(*acc, high_elem);
-            }
-            hide_accumulators::<_, ILP, true>(accumulators);
-        }
-        for (&low_elem, acc) in low_remainder.iter().zip(accumulators.iter_mut()) {
-            *acc = low_iter(*acc, low_elem);
-        }
-        for (&high_elem, acc) in high_remainder.iter().zip(accumulators.iter_mut()) {
-            *acc = high_iter(*acc, high_elem);
         }
     }
 }

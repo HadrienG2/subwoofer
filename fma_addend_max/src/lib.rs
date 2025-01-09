@@ -49,7 +49,7 @@ impl<T: FloatLike, const ILP: usize> Benchmark for FmaAddendMaxBenchmark<T, ILP>
         // Ensure that shrink is in the [1/4; 1/2[ range
         let normal_sampler = T::normal_sampler();
         let shrink = (normal_sampler(&mut rng) / T::splat(8.0)).sqrt();
-        let accumulators = operations::normal_accumulators(rng);
+        let accumulators = operations::narrow_accumulators(rng);
         Self {
             accumulators,
             shrink,

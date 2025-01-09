@@ -50,11 +50,11 @@ pub const HAS_HARDWARE_NEGATED_FMA: bool = const {
 /// Truth that the CPU ISA is known to support memory operands for scalar and
 /// SIMD operations.
 ///
-/// This means that when we are doing benchmarks like `addsub` that directly
-/// reduce memory inputs into accumulators, we don't need to load inputs into
-/// CPU registers before reducing them into the accumulator. This reduces
-/// register pressure, so we can use more CPU registers as accumulators on those
-/// some benchmarks.
+/// This means that when we are doing benchmarks like `add` that directly reduce
+/// memory inputs into accumulators, we don't need to load inputs into CPU
+/// registers before reducing them into the accumulator. This reduces register
+/// pressure, so we can use more CPU registers as accumulators on those some
+/// benchmarks.
 pub const HAS_MEMORY_OPERANDS: bool = const {
     let target = target_features::CURRENT_TARGET;
     match target.architecture() {

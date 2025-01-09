@@ -46,29 +46,18 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmar
         inputs::accumulated_len(&self.input_storage, ILP)
     }
 
-    const SUBNORMAL_INPUT_GRANULARITY: usize = 1;
-
-    fn setup_inputs(&mut self, rng: &mut impl Rng, num_subnormals: usize) {
-        // Decide whether to generate inputs now or every run
-        if operations::should_generate_every_run(&self.input_storage, num_subnormals, ILP, 1) {
-            self.num_subnormals = Some(num_subnormals);
-        } else {
-            inputs::generate_mixture(self.input_storage.as_mut(), rng, num_subnormals);
-            self.num_subnormals = None;
-        }
+    fn setup_inputs(&mut self, num_subnormals: usize) {
+        self.num_subnormals = Some(num_subnormals);
     }
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        // Generate inputs if needed, otherwise just shuffle them around
-        if let Some(num_subnormals) = self.num_subnormals {
-            inputs::generate_mixture(self.input_storage.as_mut(), rng, num_subnormals);
-        } else {
-            self.input_storage.as_mut().shuffle(rng);
-        }
-
-        // For this benchmark, the initial value of accumulators does not
-        // matter, as long as it is normal.
+        inputs::generate_max_inputs(
+            self.input_storage.as_mut(),
+            rng,
+            self.num_subnormals
+                .expect("setup_inputs should have been called first"),
+        );
         SqrtPositiveMaxRun {
             inputs: self.input_storage.freeze(),
             accumulators: operations::normal_accumulators(rng),
@@ -103,7 +92,7 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for SqrtPositiveMaxRun<I, ILP> {
                 // reuse their result for all accumulators. In fact, if the compiler
                 // were smarter, it would even be allowed to reuse these square
                 // roots during the whole outer loop of run_benchmark...
-                operations::integrate_full::<_, _, ILP, true>(
+                operations::integrate::<_, _, ILP, true>(
                     &mut self.accumulators,
                     hide_accumulators,
                     &mut self.inputs,
@@ -116,7 +105,7 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for SqrtPositiveMaxRun<I, ILP> {
                 // the inner loop over accumulators), and current LLVM is not crazy
                 // enough to precompute square roots for a whole arbitrarily large
                 // and dynamically-sized batch of input data.
-                operations::integrate_full::<_, _, ILP, false>(
+                operations::integrate::<_, _, ILP, false>(
                     &mut self.accumulators,
                     hide_accumulators,
                     &mut self.inputs,

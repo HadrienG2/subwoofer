@@ -1,12 +1,12 @@
 use common::{
     arch::{HAS_HARDWARE_NEGATED_FMA, HAS_MEMORY_OPERANDS},
-    floats::FloatLike,
-    inputs::{self, AddSubInputs, Inputs, InputsMut},
+    floats::{self, FloatLike},
+    inputs::{self, Inputs, InputsMut},
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
 
-/// FMA with possibly subnormal multiplier, used in an ADD/SUB pattern
+/// FMA with possibly subnormal multiplier, used in an ADD/SUB cycle
 #[derive(Clone, Copy)]
 pub struct FmaMultiplierBidi;
 //
@@ -27,7 +27,7 @@ impl Operation for FmaMultiplierBidi {
 
     fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
         FmaMultiplierBidiBenchmark::<_, ILP> {
-            input_storage: AddSubInputs::from(input_storage),
+            input_storage,
             num_subnormals: None,
         }
     }
@@ -35,7 +35,7 @@ impl Operation for FmaMultiplierBidi {
 
 /// [`Benchmark`] of [`FmaMultiplierBidi`]
 struct FmaMultiplierBidiBenchmark<Storage: InputsMut, const ILP: usize> {
-    input_storage: AddSubInputs<Storage>,
+    input_storage: Storage,
     num_subnormals: Option<usize>,
 }
 //
@@ -44,35 +44,23 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBidiBenchm
         inputs::accumulated_len(&self.input_storage, ILP)
     }
 
-    const SUBNORMAL_INPUT_GRANULARITY: usize = 2;
-
-    fn setup_inputs(&mut self, rng: &mut impl Rng, num_subnormals: usize) {
-        // Decide whether to generate inputs now or every run
-        if operations::should_generate_every_run(&self.input_storage, num_subnormals, ILP, 2) {
-            self.num_subnormals = Some(num_subnormals);
-        } else {
-            self.input_storage.generate(rng, num_subnormals);
-            self.num_subnormals = None;
-        }
+    fn setup_inputs(&mut self, num_subnormals: usize) {
+        self.num_subnormals = Some(num_subnormals);
     }
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        // Generate inputs if needed, otherwise just shuffle them around
-        if let Some(num_subnormals) = self.num_subnormals {
-            self.input_storage.generate(rng, num_subnormals);
-        } else {
-            self.input_storage.shuffle(rng);
-        }
-
-        // This is just a random additive walk of ~unity or subnormal step, so
-        // given a high enough starting point, an initially normal accumulator
-        // should stay in the normal range forever.
-        let normal_sampler = Storage::Element::normal_sampler();
+        inputs::generate_add_inputs::<_, ILP>(
+            &mut self.input_storage,
+            rng,
+            self.num_subnormals
+                .expect("Should have called setup_inputs first"),
+        );
+        let narrow = floats::narrow_sampler();
         FmaMultiplierBidiRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::additive_accumulators(rng),
-            multiplier: normal_sampler(rng),
+            accumulators: operations::narrow_accumulators(rng),
+            multiplier: narrow(rng),
         }
     }
 
@@ -83,10 +71,10 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBidiBenchm
 }
 
 /// [`BenchmarkRun`] of [`FmaMultiplierBidi`]
-struct FmaMultiplierBidiRun<Storage: Inputs, const ILP: usize> {
-    inputs: AddSubInputs<Storage>,
-    accumulators: [Storage::Element; ILP],
-    multiplier: Storage::Element,
+struct FmaMultiplierBidiRun<I: Inputs, const ILP: usize> {
+    inputs: I,
+    accumulators: [I::Element; ILP],
+    multiplier: I::Element,
 }
 //
 impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierBidiRun<Storage, ILP> {
@@ -94,14 +82,14 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierBidiRun<St
 
     #[inline]
     fn integrate_inputs(&mut self) {
-        // Overall, this is just the addsub benchmark with a step size that is
-        // at most 2x smaller/larger, which fundamentally doesn't change much
+        // Overall, this is just the add benchmark with a step size that is at
+        // most 2x smaller/larger, which fundamentally doesn't change much
         let multiplier = self.multiplier;
-        operations::integrate_halves::<_, _, ILP>(
+        operations::integrate::<_, _, ILP, false>(
             &mut self.accumulators,
-            &self.inputs,
+            operations::hide_accumulators::<_, ILP, false>,
+            &mut self.inputs,
             move |acc, elem| elem.mul_add(multiplier, acc),
-            move |acc, elem| elem.mul_add(-multiplier, acc),
         );
     }
 
