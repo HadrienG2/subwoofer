@@ -264,8 +264,8 @@ pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
 
 /// Generate a mixture of normal and subnormal inputs for a benchmark that
 /// follows the `acc -> max(acc, f(input))` pattern, where the accumulator is
-/// initially a normal number and f is a function that turns any normal number
-/// into another normal number.
+/// initially a normal number and f is a function that turns any positive normal
+/// number into another positive normal number.
 pub fn generate_max_inputs<T: FloatLike, R: Rng>(
     target: &mut [T],
     rng: &mut R,
