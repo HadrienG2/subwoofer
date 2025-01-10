@@ -79,6 +79,10 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for AddRun<Storage, ILP> {
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, false>,
             &mut self.inputs,
+            // - Each normal input `elem` is followed by the opposite input
+            //   `-elem`, taking the accumulator back to its nominal magnitude
+            //   range [1/2; 2[.
+            // - Subnormal inputs have no effect on the accumulator
             move |acc, elem| acc + elem,
         );
     }

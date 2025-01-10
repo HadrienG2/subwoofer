@@ -41,7 +41,6 @@ impl Operation for Max {
 }
 
 /// [`Benchmark`] of [`Max`]
-#[derive(Clone, Copy)]
 struct MaxBenchmark<Storage: InputsMut, const ILP: usize> {
     input_storage: Storage,
     num_subnormals: Option<usize>,
@@ -93,6 +92,9 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for MaxRun<I, ILP> {
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, true>,
             &mut self.inputs,
+            // MAX is unaffected by the order of magnitude of inputs, so this
+            // benchmark behaves homogeneously no matter what the order of
+            // magnitude of its normal inputs is.
             |acc, elem| acc.fast_max(elem),
         );
     }

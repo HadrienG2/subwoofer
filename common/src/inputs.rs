@@ -275,10 +275,6 @@ pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
     generate_arbitrary_inputs::<_, _, ILP>(target, rng, num_subnormals, AddGenerator);
 }
 
-// TODO: Use generate_muldiv_inputs in mul_max, div_denominator_min and
-//       div_numerator_max, adjust the lower and upper bounds to 0.25 and 4.0,
-//       fix the rest
-
 /// Generate normal and subnormal inputs for a benchmark that follows one of the
 /// `acc -> max(acc * input, 1/4)`, `acc -> min(acc / input, 4) ` and `acc ->
 /// max(input / acc, 1/4)` patterns, where the initial accumulator value is a
@@ -450,22 +446,36 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
                     // Otherwise, we should exchange the last subnormal input
                     // with the first normal input...
                     let last = stream
-                            .last()
+                            .next_back()
                             .expect("Last input should be subnormal, it cannot be the first input if it's normal");
                     debug_assert!(last.is_subnormal());
                     std::mem::swap(first, last);
 
                     // ...and fix up that new trailing normal input so that it
-                    // is correct in the context of any previous normal input
+                    // is correct in the context of the previous normal input
                     // values at the end of the stream.
-                    //
-                    // FIXME: Fix up new last value so that it makes sense in
-                    //        the context of any previous normal values. It
-                    //        should either be the inverse of the previous
-                    //        normal value or 1.0, depending on whether the
-                    //        resulting stream of normal numbers has an even or
-                    //        odd length.
-                    unimplemented!()
+                    if let Some(second_to_last) = stream.next_back().copied() {
+                        if second_to_last.is_normal() {
+                            let num_prev_normals =
+                                stream.rev().take_while(|elem| elem.is_normal()).count();
+                            if num_prev_normals % 2 == 0 {
+                                // If there is an even number of inputs before
+                                // the second-to-last normal input, then this
+                                // normal input grows/shrinks the accumulator
+                                // and we should invert its effect to restore
+                                // the accumulator back to its initial value.
+                                *last = (self.generator.invert_normal)(second_to_last);
+                            } else {
+                                // If there is an odd number of inputs before
+                                // the second-to-last normal input, then this
+                                // second-to-last input brought the accumulator
+                                // back to its initial [1/2; 2[ range, and the
+                                // last normal input should keep the accumulator
+                                // in the same order of magnitude.
+                                *last = T::splat(1.0);
+                            }
+                        }
+                    }
                 }
             }
         }
