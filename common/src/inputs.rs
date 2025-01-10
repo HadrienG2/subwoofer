@@ -443,6 +443,13 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
                             .expect("Last input should be subnormal, it cannot be the first input if it's normal");
                         debug_assert!(last.is_subnormal());
                         std::mem::swap(first, last);
+                        // FIXME: Fix up new last value so that it makes sense
+                        //        in the context of any previous normal values.
+                        //        It should either be the inverse of the
+                        //        previous normal value or 1.0, depending on
+                        //        whether the resulting streams of normal
+                        //        numbers has an even or odd length.
+                        unimplemented!()
                     }
                 }
             }
