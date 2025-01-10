@@ -24,6 +24,7 @@ pub trait FloatLike:
     + Pessimize
     + Sub<Output = Self>
     + SubAssign
+    + 'static
 {
     /// Random distribution of positive IEEE-754 floats with a given exponent
     /// range and uniformly random fraction bits
@@ -90,6 +91,8 @@ pub trait FloatLike:
     fn fast_max(self, other: Self) -> Self;
 
     // We're also gonna need some float data & ops not exposed via std traits
+    fn is_normal(self) -> bool;
+    fn is_subnormal(self) -> bool;
     //
     // Implementations of all of these functions must be marked `#[inline]` as
     // they will be called within the timed benchmark loop.
@@ -169,6 +172,14 @@ impl FloatLike for f32 {
         } else {
             other
         }
+    }
+
+    fn is_normal(self) -> bool {
+        f32::is_normal(self)
+    }
+
+    fn is_subnormal(self) -> bool {
+        f32::is_subnormal(self)
     }
 
     #[inline]
@@ -256,6 +267,14 @@ impl FloatLike for f64 {
         }
     }
 
+    fn is_normal(self) -> bool {
+        f64::is_normal(self)
+    }
+
+    fn is_subnormal(self) -> bool {
+        f64::is_subnormal(self)
+    }
+
     #[inline]
     fn splat(x: f32) -> Self {
         x as f64
@@ -279,14 +298,9 @@ where
     Self: Pessimize + StdFloat,
 {
     #[inline]
-    fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f32::normal_sampler();
+    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+        let sampler = f32::sampler(exp_range);
         #[inline]
-        move |rng| std::array::from_fn(|_| sampler(rng)).into()
-    }
-
-    fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f32::subnormal_sampler();
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
@@ -339,6 +353,14 @@ where
         self.simd_gt(other).select(self, other)
     }
 
+    fn is_normal(self) -> bool {
+        self[0].is_normal()
+    }
+
+    fn is_subnormal(self) -> bool {
+        self[0].is_subnormal()
+    }
+
     #[inline]
     fn splat(x: f32) -> Self {
         Simd::splat(x)
@@ -362,14 +384,9 @@ where
     Self: Pessimize + StdFloat,
 {
     #[inline]
-    fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f64::normal_sampler();
+    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+        let sampler = f64::sampler(exp_range);
         #[inline]
-        move |rng| std::array::from_fn(|_| sampler(rng)).into()
-    }
-
-    fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f64::subnormal_sampler();
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
@@ -422,6 +439,14 @@ where
         self.simd_gt(other).select(self, other)
     }
 
+    fn is_normal(self) -> bool {
+        self[0].is_normal()
+    }
+
+    fn is_subnormal(self) -> bool {
+        self[0].is_subnormal()
+    }
+
     #[inline]
     fn splat(x: f32) -> Self {
         Simd::splat(x as f64)
@@ -439,6 +464,7 @@ where
 }
 
 /// Random distribution of all possible normal numbers
+#[inline]
 pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
     T::sampler::<R>((T::FINITE_EXPS.start + 1)..T::FINITE_EXPS.end)
 }
@@ -448,12 +474,14 @@ pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
 /// This is the basic distribution that we use when we want a tight exponent
 /// range, but still coverage of all possible mantissa patterns and
 /// positive/negative exponents.
+#[inline]
 pub fn narrow_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
     T::sampler::<R>(-1..1)
 }
 
 /// Random distribution that can yield all subnormal numbers, but also has a
 /// small probability of yielding zero (1 / number of fraction bits of T)
+#[inline]
 pub fn subnormal_zero_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
     T::sampler::<R>(T::FINITE_EXPS.start..(T::FINITE_EXPS.start + 1))
 }
@@ -462,6 +490,7 @@ pub fn subnormal_zero_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
 ///
 /// Unlike `subnormal_zero_sampler()`, this will never yield zero, but may run
 /// slower as a result.
+#[inline]
 pub fn subnormal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
     let subnormal_or_zero = subnormal_zero_sampler::<T, R>();
     let zero = T::splat(0.0);

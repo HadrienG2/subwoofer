@@ -73,8 +73,11 @@ pub trait Benchmark {
     ///   last-resort option, as it maximizes measurement bias.
     ///
     /// You will normally want to initialize the accumulators using
-    /// [`narrow_accumulators()`] in this function, but sometimes you can go for
-    /// the maximally general [`normal_accumulators()`].
+    /// [`narrow_accumulators()`] in this function, to avoid the precision
+    /// issues that arise when inputs and accumulators do not have the same
+    /// order of magnitude. But in a benchmarks of `MAX` and similar primitives
+    /// that have no accumulation error you can go for the maximally general
+    /// [`normal_accumulators()`].
     ///
     /// The input storage of the resulting [`BenchmarkRun`] should be derived
     /// from that of this benchmark through
@@ -123,7 +126,7 @@ pub trait BenchmarkRun {
     /// [`hide_single_accumulator()`].
     ///
     /// Implementations must be marked `#[inline]` as this function will be
-    /// called as part of the timed benchmark run.
+    /// called repeatedly as part of the timed benchmark run.
     fn integrate_inputs(&mut self);
 
     /// Access the benchmark's data accumulators
@@ -150,7 +153,12 @@ pub fn normal_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -
     std::array::from_fn::<_, ILP, _>(|_| normal(rng))
 }
 
-/// Benchmark skeleton that processes the full input homogeneously
+/// Benchmark skeleton for processing the dataset with N accumulators
+///
+/// `hide_accumulators` should usually point to an instance of the
+/// [`hide_accumulators()`] function defined in this module. The only reason why
+/// we don't make it just a bool generic parameter is that sets of multiple
+/// generic boolean parameters are hard to read on the caller side.
 #[inline]
 pub fn integrate<
     T: FloatLike,
