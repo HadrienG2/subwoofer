@@ -434,23 +434,38 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
                     *last = T::splat(1.0);
                 }
                 MulDivState::CancelSubnormal => {
+                    // A subnormal input brings the accumulator to an abnormal
+                    // magnitude, so it can only be tolerated as the last input
+                    // of the data stream if the resulting abnormal accumulator
+                    // state is ignored by the next benchmark run (because that
+                    // run starts with a subnormal input).
                     let first = stream
                         .next()
                         .expect("CancelSubnormal only reachable after >= 1 subnormal");
-                    if first.is_normal() {
-                        let last = stream
+                    if first.is_subnormal() {
+                        return;
+                    }
+                    debug_assert!(first.is_normal());
+
+                    // Otherwise, we should exchange the last subnormal input
+                    // with the first normal input...
+                    let last = stream
                             .last()
                             .expect("Last input should be subnormal, it cannot be the first input if it's normal");
-                        debug_assert!(last.is_subnormal());
-                        std::mem::swap(first, last);
-                        // FIXME: Fix up new last value so that it makes sense
-                        //        in the context of any previous normal values.
-                        //        It should either be the inverse of the
-                        //        previous normal value or 1.0, depending on
-                        //        whether the resulting streams of normal
-                        //        numbers has an even or odd length.
-                        unimplemented!()
-                    }
+                    debug_assert!(last.is_subnormal());
+                    std::mem::swap(first, last);
+
+                    // ...and fix up that new trailing normal input so that it
+                    // is correct in the context of any previous normal input
+                    // values at the end of the stream.
+                    //
+                    // FIXME: Fix up new last value so that it makes sense in
+                    //        the context of any previous normal values. It
+                    //        should either be the inverse of the previous
+                    //        normal value or 1.0, depending on whether the
+                    //        resulting stream of normal numbers has an even or
+                    //        odd length.
+                    unimplemented!()
                 }
             }
         }
