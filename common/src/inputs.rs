@@ -516,31 +516,14 @@ fn generate_arbitrary_inputs<Storage: InputsMut, R: Rng, const ILP: usize>(
         generator: G,
         num_streams: usize,
     ) {
-        // Decide if the next element of `target` should be subnormal
-        let mut pick_subnormal = subnormal_picker(target.len(), num_subnormals);
-
         // Set up data stream generators
         let mut stream_states: [_; MIN_FLOAT_REGISTERS] =
             std::array::from_fn(|_| generator.new_stream());
         assert!(num_streams < stream_states.len());
         let stream_states = &mut stream_states[..num_streams];
 
-        // Recipe for the next element of a particular data stream
-        let narrow = floats::narrow_sampler::<T, R>();
-        let subnormal = floats::subnormal_sampler::<T, R>();
-        let mut global_idx = 0;
-        let mut generate_element = |state: &mut G::Stream<'_>| {
-            let result = if pick_subnormal(rng) {
-                state.record_subnormal();
-                subnormal(rng)
-            } else {
-                state.generate_normal(global_idx, rng, &narrow)
-            };
-            global_idx += 1;
-            result
-        };
-
         // Generate each element of each data stream
+        let mut generate_element = element_generator(target.len(), rng, num_subnormals);
         let mut target_chunks = target.chunks_exact_mut(num_streams);
         for chunk in target_chunks.by_ref() {
             for (target, state) in chunk.iter_mut().zip(stream_states.iter_mut()) {
@@ -555,7 +538,7 @@ fn generate_arbitrary_inputs<Storage: InputsMut, R: Rng, const ILP: usize>(
             *target = generate_element(state);
         }
 
-        // Fix up data streams at the end to enforce accumulator reset
+        // Tweak final data streams to enforce a perfect accumulator reset
         for (stream_idx, state) in stream_states
             .iter_mut()
             .map(|state| std::mem::replace(state, generator.new_stream()))
@@ -569,6 +552,10 @@ fn generate_arbitrary_inputs<Storage: InputsMut, R: Rng, const ILP: usize>(
         }
     }
 }
+
+// TODO: Définir FloatLike pour [T: FloatLike; 2], ou un type paire maison si
+//       l'orphan rule n'est pas ok avec cette définition puis faire une
+//       variante à deux substreams de ce qui précède.
 
 /// Shared state of an input data generator
 trait Generator<T: FloatLike, R: Rng> {
@@ -635,7 +622,7 @@ struct Stream<'data, T: FloatLike> {
 //
 impl<'data, T: FloatLike> Stream<'data, T> {
     /// Iterate over data from the specified data stream
-    fn into_iter(self) -> impl DoubleEndedIterator<Item = &'data mut T> + ExactSizeIterator {
+    pub fn into_iter(self) -> impl DoubleEndedIterator<Item = &'data mut T> + ExactSizeIterator {
         debug_assert!(self.stream_idx < self.num_streams);
         self.target
             .iter_mut()
@@ -646,13 +633,42 @@ impl<'data, T: FloatLike> Stream<'data, T> {
     /// Access data by global position
     ///
     /// The specified global index must belong to the data stream of interest.
-    /// So given that subnormal values should not be inspected, it should
+    /// So given that subnormal values should not be modified, it should
     /// previously have been received by a
     /// [`generate_normal()`](StreamState::generate_normal) implementation.
-    fn at_global_idx(&mut self, global_idx: usize) -> &mut T {
+    pub fn at_global_idx(&mut self, global_idx: usize) -> &mut T {
         debug_assert!(self.stream_idx < self.num_streams);
         assert_eq!(global_idx % self.num_streams, self.stream_idx);
         &mut self.target[global_idx]
+    }
+}
+
+/// Recipe for iteratively producing substreams of a broader dataset
+///
+/// Given the total number of elements to be produced, the number of subnormal
+/// inputs within this global dataset, and a random number generator, this
+/// produces a function that, given the state of a particular substream of the
+/// dataset, produces the next element of this substream and updates its state.
+fn element_generator<R: Rng, S: StreamState<R>>(
+    target_len: usize,
+    rng: &mut R,
+    num_subnormals: usize,
+) -> impl FnMut(&mut S) -> S::Float + '_ {
+    debug_assert!(num_subnormals < target_len);
+    let narrow = floats::narrow_sampler::<S::Float, R>();
+    let subnormal = floats::subnormal_sampler::<S::Float, R>();
+    let mut pick_subnormal = subnormal_picker(target_len, num_subnormals);
+    let mut global_idx = 0;
+    move |state: &mut S| {
+        debug_assert!(global_idx < target_len);
+        let result = if pick_subnormal(rng) {
+            state.record_subnormal();
+            subnormal(rng)
+        } else {
+            state.generate_normal(global_idx, rng, &narrow)
+        };
+        global_idx += 1;
+        result
     }
 }
 
@@ -665,6 +681,7 @@ fn subnormal_picker<R: Rng>(
     mut target_len: usize,
     mut num_subnormals: usize,
 ) -> impl FnMut(&mut R) -> bool {
+    debug_assert!(num_subnormals < target_len);
     move |rng| {
         debug_assert!(target_len > 0);
         let subnormal_pos = rng.gen_range(0..target_len);
