@@ -550,8 +550,9 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
     }
 }
 
-/// Like `generate_input_streams` but the dataset is split in two even parts and
-/// each data stream is composed of pairs of elements from each part.
+/// Like `generate_input_streams` but the dataset is split in two even halves
+/// and each data stream is composed of pairs of elements from each half (which
+/// itself contains the usual interleaved data layout).
 ///
 /// For this to work, `target` must contain an even number of elements.
 ///
@@ -562,14 +563,14 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
     target: &mut Storage,
     rng: &mut R,
     num_subnormals: usize,
-    generator: impl InputPairGenerator<Storage::Element, R>,
+    generator: impl InputGenerator<Storage::Element, R>,
 ) {
     // Determine how many interleaved input data streams should be generated...
     let num_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
     inner(target.as_mut(), rng, num_subnormals, generator, num_streams);
     //
     // ...then dispatch to a less generic backend to reduce code bloat
-    fn inner<T: FloatLike, R: Rng, G: InputPairGenerator<T, R>>(
+    fn inner<T: FloatLike, R: Rng, G: InputGenerator<T, R>>(
         target: &mut [T],
         rng: &mut R,
         num_subnormals: usize,
