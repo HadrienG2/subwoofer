@@ -264,7 +264,7 @@ pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
             }
         }
 
-        fn finalize(self, mut stream: Stream<'_, T>) {
+        fn finalize(self, mut stream: DataStream<'_, T>) {
             if let Self::OppositeOf { global_idx, .. } = self {
                 *stream.at_global_idx(global_idx) = T::splat(0.0);
             }
@@ -418,7 +418,7 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
             }
         }
 
-        fn finalize(self, stream: Stream<'_, T>) {
+        fn finalize(self, stream: DataStream<'_, T>) {
             let mut stream = stream.into_iter();
             match self.state {
                 MulDivState::Unconstrained => {}
@@ -518,35 +518,30 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
         generator: G,
         num_streams: usize,
     ) {
-        // Set up data stream generators
-        let mut stream_states: [_; MIN_FLOAT_REGISTERS] =
-            std::array::from_fn(|_| generator.new_stream());
-        assert!(num_streams < stream_states.len());
-        let stream_states = &mut stream_states[..num_streams];
+        // Set up the interleaved data streams
+        let mut streams: [_; MIN_FLOAT_REGISTERS] = std::array::from_fn(|_| generator.new_stream());
+        assert!(num_streams < streams.len());
+        let streams = &mut streams[..num_streams];
 
         // Generate each element of each data stream
         let mut generate_element = element_generator(target.len(), rng, num_subnormals);
         let mut target_chunks = target.chunks_exact_mut(num_streams);
         for chunk in target_chunks.by_ref() {
-            for (target, state) in chunk.iter_mut().zip(stream_states.iter_mut()) {
-                *target = generate_element(state);
+            for (target, stream) in chunk.iter_mut().zip(streams) {
+                *target = generate_element(stream);
             }
         }
-        for (target, state) in target_chunks
-            .into_remainder()
-            .iter_mut()
-            .zip(stream_states.iter_mut())
-        {
-            *target = generate_element(state);
+        for (target, stream) in target_chunks.into_remainder().iter_mut().zip(streams) {
+            *target = generate_element(stream);
         }
 
         // Tweak final data streams to enforce a perfect accumulator reset
-        for (stream_idx, state) in stream_states
+        for (stream_idx, stream) in streams
             .iter_mut()
-            .map(|state| std::mem::replace(state, generator.new_stream()))
+            .map(|stream| std::mem::replace(stream, generator.new_stream()))
             .enumerate()
         {
-            state.finalize(Stream {
+            stream.finalize(DataStream {
                 target,
                 stream_idx,
                 num_streams,
@@ -555,9 +550,100 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
     }
 }
 
-// TODO: Définir FloatLike pour [T: FloatLike; 2], ou un type paire maison si
-//       l'orphan rule n'est pas ok avec cette définition puis faire une
-//       variante à deux substreams de ce qui précède.
+/// Like `generate_input_streams` but the dataset is split in two even parts and
+/// each data stream is composed of pairs of elements from each part.
+///
+/// For this to work, `target` must contain an even number of elements.
+///
+/// This is needed for benchmarks where each accumulator receives data from two
+/// input data streams that play an asymmetric role, like the `acc <-
+/// max(fma(acc, input1, input2), lower_bound)` benchmark.
+pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
+    target: &mut Storage,
+    rng: &mut R,
+    num_subnormals: usize,
+    generator: impl InputPairGenerator<Storage::Element, R>,
+) {
+    // Determine how many interleaved input data streams should be generated...
+    let num_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
+    inner(target.as_mut(), rng, num_subnormals, generator, num_streams);
+    //
+    // ...then dispatch to a less generic backend to reduce code bloat
+    fn inner<T: FloatLike, R: Rng, G: InputPairGenerator<T, R>>(
+        target: &mut [T],
+        rng: &mut R,
+        num_subnormals: usize,
+        generator: G,
+        num_streams: usize,
+    ) {
+        // Set up the interleaved data streams
+        let mut streams: [_; MIN_FLOAT_REGISTERS] = std::array::from_fn(|_| generator.new_stream());
+        assert!(num_streams < streams.len());
+        let streams = &mut streams[..num_streams];
+
+        // Split the input in two halves
+        assert_eq!(target.len() % 2, 0);
+        let half_len = target.len() / 2;
+        let (mut left_target, mut right_target) = target.split_at_mut(half_len);
+        debug_assert_eq!(left_target.len(), right_target.len());
+
+        // Generate each element of each data stream
+        let mut generate_pair = element_pair_generator(target.len(), rng, num_subnormals);
+        let mut left_chunks = left_target.chunks_exact_mut(num_streams);
+        let mut right_chunks = right_target.chunks_exact_mut(num_streams);
+        'chunks: loop {
+            match (left_chunks.next(), right_chunks.next()) {
+                (Some(left_chunk), Some(right_chunk)) => {
+                    for ((left_elem, right_elem), stream) in
+                        left_chunk.iter_mut().zip(right_chunk).zip(streams)
+                    {
+                        let [left, right] = generate_pair(stream);
+                        *left_elem = left;
+                        *right_elem = right;
+                    }
+                }
+                (None, None) => break 'chunks,
+                (Some(_), None) | (None, Some(_)) => {
+                    unreachable!("not possible with equal-length halves")
+                }
+            }
+        }
+        {
+            let mut left_elems = left_chunks.into_remainder().iter_mut();
+            let mut right_elems = right_chunks.into_remainder().iter_mut();
+            let mut streams = streams.iter_mut();
+            'elems: loop {
+                match ((left_elems.next(), right_elems.next()), streams.next()) {
+                    ((Some(left_elem), Some(right_elem)), Some(stream)) => {
+                        let [left, right] = generate_pair(stream);
+                        *left_elem = left;
+                        *right_elem = right;
+                    }
+                    ((None, None), Some(_)) => break 'elems,
+                    ((Some(_), None), _) | ((None, Some(_)), _) => {
+                        unreachable!("not possible with equal-length halves")
+                    }
+                    (_, None) => {
+                        unreachable!("should have remainder.len() < num_streams")
+                    }
+                }
+            }
+        }
+
+        // Tweak final data streams to enforce a perfect accumulator reset
+        for (stream_idx, stream) in streams
+            .iter_mut()
+            .map(|stream| std::mem::replace(stream, generator.new_stream()))
+            .enumerate()
+        {
+            stream.finalize(DataPairStream {
+                target,
+                stream_idx,
+                num_streams,
+            })
+        }
+    }
+}
 
 /// Input data generator that produces multiple interleaved data stream
 trait InputGenerator<T: FloatLike, R: Rng> {
@@ -627,17 +713,17 @@ trait GeneratorStream<R: Rng> {
     /// repositioned in the data stream if necessary, provided that the result
     /// is subsequently fixed up to make it look as if the subnormal value was
     /// there from the beginning.
-    fn finalize(self, stream: Stream<'_, Self::Float>);
+    fn finalize(self, stream: DataStream<'_, Self::Float>);
 }
 
 /// Single input data stream in the context of a global data set
-struct Stream<'data, T: FloatLike> {
+struct DataStream<'data, T: FloatLike> {
     target: &'data mut [T],
     stream_idx: usize,
     num_streams: usize,
 }
 //
-impl<'data, T: FloatLike> Stream<'data, T> {
+impl<'data, T: FloatLike> DataStream<'data, T> {
     /// Iterate over data from the specified data stream
     pub fn into_iter(self) -> impl DoubleEndedIterator<Item = &'data mut T> + ExactSizeIterator {
         debug_assert!(self.stream_idx < self.num_streams);
@@ -665,13 +751,13 @@ impl<'data, T: FloatLike> Stream<'data, T> {
 /// Given the total number of elements to be produced, the number of subnormal
 /// inputs within this global dataset, and a random number generator, this
 /// produces a function that, given the state of a particular substream of the
-/// dataset, produces the next element of this substream and updates its state.
+/// dataset, produces the next element of this substream.
 fn element_generator<R: Rng, S: GeneratorStream<R>>(
     target_len: usize,
     rng: &mut R,
     num_subnormals: usize,
 ) -> impl FnMut(&mut S) -> S::Float + '_ {
-    debug_assert!(num_subnormals < target_len);
+    assert!(num_subnormals < target_len);
     let narrow = floats::narrow_sampler::<S::Float, R>();
     let subnormal = floats::subnormal_sampler::<S::Float, R>();
     let mut pick_subnormal = subnormal_picker(target_len, num_subnormals);
@@ -698,7 +784,7 @@ fn subnormal_picker<R: Rng>(
     mut target_len: usize,
     mut num_subnormals: usize,
 ) -> impl FnMut(&mut R) -> bool {
-    debug_assert!(num_subnormals < target_len);
+    assert!(num_subnormals < target_len);
     move |rng| {
         debug_assert!(target_len > 0);
         let subnormal_pos = rng.gen_range(0..target_len);
