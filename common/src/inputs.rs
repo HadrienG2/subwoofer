@@ -215,7 +215,7 @@ pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
     /// (Lack of) global state for this input generator
     struct AddGenerator;
     //
-    impl<T: FloatLike, R: Rng> Generator<T, R> for AddGenerator {
+    impl<T: FloatLike, R: Rng> InputGenerator<T, R> for AddGenerator {
         type Stream<'a> = AddStream<T>;
 
         fn new_stream(&self) -> Self::Stream<'_> {
@@ -238,7 +238,7 @@ pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
         },
     }
     //
-    impl<T: FloatLike, R: Rng> StreamState<R> for AddStream<T> {
+    impl<T: FloatLike, R: Rng> GeneratorStream<R> for AddStream<T> {
         type Float = T;
 
         #[inline]
@@ -272,7 +272,7 @@ pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
     }
 
     // Generate benchmark inputs
-    generate_arbitrary_inputs::<_, _, ILP>(target, rng, num_subnormals, AddGenerator);
+    generate_input_streams::<_, _, ILP>(target, rng, num_subnormals, AddGenerator);
 }
 
 /// Generate normal and subnormal inputs for a benchmark that follows one of the
@@ -311,10 +311,10 @@ pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
 ///     therefore we impose that either the last input is normal (in which case
 ///     this problem doesn't exist) or the first input is subnormal (in which
 ///     case the initial accumulator value is immediately destroyed on the first
-///     iteration of the next run and it doesn't matter that it has an unusual
-///     magnitude). This is achieved by enforcing that whenever the first input
-///     value is normal and the last input value is subnormal, they are swapped
-///     and what is now the new last normal input value is regenerated.
+///     iteration of the next run and it doesn't matter much that it has an
+///     unusual magnitude). This is achieved by enforcing that when the first
+///     input value is normal and the last input value is subnormal, they are
+///     swapped and what is now the new last normal input value is regenerated.
 pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
     target: &mut Storage,
     rng: &mut impl Rng,
@@ -338,7 +338,7 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
         _unused: PhantomData<T>,
     }
     //
-    impl<T: FloatLike, R: Rng, InvertNormal, CancelSubnormal> Generator<T, R>
+    impl<T: FloatLike, R: Rng, InvertNormal, CancelSubnormal> InputGenerator<T, R>
         for MulDivGenerator<T, InvertNormal, CancelSubnormal>
     where
         InvertNormal: Fn(T) -> T + 'static,
@@ -360,7 +360,7 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
         InvertNormal: Fn(T) -> T,
         CancelSubnormal: Fn(T) -> T,
     {
-        /// Underlying generator state
+        /// Back-reference to the common generator state
         generator: &'generator MulDivGenerator<T, InvertNormal, CancelSubnormal>,
 
         /// Per-stream state machine
@@ -381,7 +381,7 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
         CancelSubnormal,
     }
     //
-    impl<T: FloatLike, R: Rng, InvertNormal, CancelSubnormal> StreamState<R>
+    impl<T: FloatLike, R: Rng, InvertNormal, CancelSubnormal> GeneratorStream<R>
         for MulDivStream<'_, T, InvertNormal, CancelSubnormal>
     where
         InvertNormal: Fn(T) -> T + 'static,
@@ -482,7 +482,7 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
     }
 
     // Generate benchmark inputs
-    generate_arbitrary_inputs::<_, _, ILP>(
+    generate_input_streams::<_, _, ILP>(
         target,
         rng,
         num_subnormals,
@@ -494,22 +494,24 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
     );
 }
 
-/// Generic input data generation procedure
+/// Generic procedure for generating a benchmark input dataset composed of N
+/// interleaved data streams
 ///
 /// This is the common logic that most `generate_xyz_inputs` functions plug
-/// into, except for `generate_max_inputs` which can follow a simpler logic.
-fn generate_arbitrary_inputs<Storage: InputsMut, R: Rng, const ILP: usize>(
+/// into, except for `generate_max_inputs` which can generate fully random data
+/// and does not need to acknowledge the existence of interleaved data streams.
+fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
     target: &mut Storage,
     rng: &mut R,
     num_subnormals: usize,
-    generator: impl Generator<Storage::Element, R>,
+    generator: impl InputGenerator<Storage::Element, R>,
 ) {
     // Determine how many interleaved input data streams should be generated...
     let num_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
     inner(target.as_mut(), rng, num_subnormals, generator, num_streams);
     //
-    // ...then dispatch to a less generic backend function to reduce code bloat
-    fn inner<T: FloatLike, R: Rng, G: Generator<T, R>>(
+    // ...then dispatch to a less generic backend to reduce code bloat
+    fn inner<T: FloatLike, R: Rng, G: InputGenerator<T, R>>(
         target: &mut [T],
         rng: &mut R,
         num_subnormals: usize,
@@ -557,38 +559,50 @@ fn generate_arbitrary_inputs<Storage: InputsMut, R: Rng, const ILP: usize>(
 //       l'orphan rule n'est pas ok avec cette définition puis faire une
 //       variante à deux substreams de ce qui précède.
 
-/// Shared state of an input data generator
-trait Generator<T: FloatLike, R: Rng> {
-    /// State associated to one specific data stream of an input generator
-    type Stream<'a>: StreamState<R, Float = T>
+/// Input data generator that produces multiple interleaved data stream
+trait InputGenerator<T: FloatLike, R: Rng> {
+    /// State associated to one specific data stream
+    type Stream<'a>: GeneratorStream<R, Float = T>
     where
         Self: 'a;
 
     /// Set up a new data stream
     ///
-    /// Implementations should not assume anything from the number of times that
-    /// this function will be called. For boring technical reasons, we may need
-    /// to set up more data streams than we are actually going to use.
+    /// For boring technical resons, this function may be called more times than
+    /// there are actual data streams in the generated dataset, and it may be
+    /// even called again after the previously created data streams have been
+    /// acted upon for a while. The resulting dummy streams will not be used,
+    /// they just act as placeholder values inside of some internal container.
+    ///
+    /// Implementations of this trait should take this constraint into account:
+    ///
+    /// - They should refrain from interpreting the number of times this method
+    ///   is called as being equal to the number of data streams in flight
+    /// - They should not assume that `new_stream()` won't be called again after
+    ///   some of the previously created streams start being used.
+    ///
+    /// If you have no other choice, it is however acceptable to spawn dummy
+    /// unusable data streams that panic on use, after the expected number of
+    /// data streams has been created.
     fn new_stream(&self) -> Self::Stream<'_>;
 }
 
-/// Input data stream from a particular [`Generator`]
-trait StreamState<R: Rng> {
+/// Data stream from a particular [`InputGenerator`]
+trait GeneratorStream<R: Rng> {
     /// Type of floating-point value that is being generated
     type Float: FloatLike;
 
     /// Take note that a subnormal number has been generated
     fn record_subnormal(&mut self);
 
-    /// Generate the next normal input value
+    /// Generate the next normal value
     ///
-    /// `global_idx` uniquely identifies the input value in the full dataset ,
-    /// and can be used to easily locate it back at the
-    /// `loopback_normal_values()` stage.
+    /// `global_idx` uniquely identifies the generated value in the full dataset
+    /// and can be used to locate it at the `loopback_normal_values()` stage.
     ///
     /// `rng` is the random number generator to be used, and `narrow` is the
-    /// usual `[1/2; 2[` random distribution that should be used whenever the
-    /// target benchmark imposes no other constraint.
+    /// usual `[1/2; 2[` random distribution that should be used with this RNG
+    /// whenever the target benchmark imposes no other constraint.
     fn generate_normal(
         &mut self,
         global_idx: usize,
@@ -604,12 +618,15 @@ trait StreamState<R: Rng> {
     /// processing the entire data stream, and thus to avoid unbounded
     /// accumulator growth/shrinkage over many benchmark iterations.
     ///
-    /// This method is called after right after all values have been generated,
-    /// so it is guaranteed that the last normal value in the stream will be the
-    /// last one that was generated by `generate_normal()`.
+    /// This method is called right after all values have been generated, so it
+    /// is guaranteed that the last normal value in the stream will be the last
+    /// one that was generated by `generate_normal()`.
     ///
     /// Subnormal values are exposed in the stream because they can affect the
-    /// procedure, but they should neither be modified nor repositioned.
+    /// procedure, but they should not be modified. They may, however, be
+    /// repositioned in the data stream if necessary, provided that the result
+    /// is subsequently fixed up to make it look as if the subnormal value was
+    /// there from the beginning.
     fn finalize(self, stream: Stream<'_, Self::Float>);
 }
 
@@ -635,7 +652,7 @@ impl<'data, T: FloatLike> Stream<'data, T> {
     /// The specified global index must belong to the data stream of interest.
     /// So given that subnormal values should not be modified, it should
     /// previously have been received by a
-    /// [`generate_normal()`](StreamState::generate_normal) implementation.
+    /// [`generate_normal()`](GeneratorStream::generate_normal) implementation.
     pub fn at_global_idx(&mut self, global_idx: usize) -> &mut T {
         debug_assert!(self.stream_idx < self.num_streams);
         assert_eq!(global_idx % self.num_streams, self.stream_idx);
@@ -649,7 +666,7 @@ impl<'data, T: FloatLike> Stream<'data, T> {
 /// inputs within this global dataset, and a random number generator, this
 /// produces a function that, given the state of a particular substream of the
 /// dataset, produces the next element of this substream and updates its state.
-fn element_generator<R: Rng, S: StreamState<R>>(
+fn element_generator<R: Rng, S: GeneratorStream<R>>(
     target_len: usize,
     rng: &mut R,
     num_subnormals: usize,
