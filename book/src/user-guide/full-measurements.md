@@ -41,8 +41,8 @@ Here's how to decide which benchmarks you can disable:
   `div_numerator_max` benchmarks was not affected by subnormals during the basic
   check, then you can disable it during the full measurement.
 - If the `fma_full_max_mul` benchmark was not affected by subnormals during the
-  basic check, then you can disable the `fma_addend_max`, `fma_multiplier_bidi`
-  and `fma_full_max_mul` benchmarks during the full measurement.
+  basic check, then you can disable the `fma_addend`, `fma_multiplier` and
+  `fma_full_max_mul` benchmarks during the full measurement.
 - If **none** of the `mul_max` and `fma_full_max_mul` benchmarks were affected
   by subnormals, you can disable the `mul_max` benchmark during the full
   measurement.

@@ -6,12 +6,12 @@ use common::{
 };
 use rand::Rng;
 
-/// FMA with possibly subnormal multiplier, used in an ADD/SUB cycle
+/// FMA with possibly subnormal multiplier
 #[derive(Clone, Copy)]
-pub struct FmaMultiplierBidi;
+pub struct FmaMultiplier;
 //
-impl Operation for FmaMultiplierBidi {
-    const NAME: &str = "fma_multiplier_bidi";
+impl Operation for FmaMultiplier {
+    const NAME: &str = "fma_multiplier";
 
     // One register for the constant multiplier, and another register for a
     // negated version of that multiplier if the target CPU does not have an
@@ -26,20 +26,20 @@ impl Operation for FmaMultiplierBidi {
         1 + (!HAS_HARDWARE_NEGATED_FMA) as usize + (!HAS_MEMORY_OPERANDS) as usize;
 
     fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
-        FmaMultiplierBidiBenchmark::<_, ILP> {
+        FmaMultiplierBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
         }
     }
 }
 
-/// [`Benchmark`] of [`FmaMultiplierBidi`]
-struct FmaMultiplierBidiBenchmark<Storage: InputsMut, const ILP: usize> {
+/// [`Benchmark`] of [`FmaMultiplier`]
+struct FmaMultiplierBenchmark<Storage: InputsMut, const ILP: usize> {
     input_storage: Storage,
     num_subnormals: Option<usize>,
 }
 //
-impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBidiBenchmark<Storage, ILP> {
+impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBenchmark<Storage, ILP> {
     fn num_operations(&self) -> usize {
         inputs::accumulated_len(&self.input_storage, ILP)
     }
@@ -57,7 +57,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBidiBenchm
                 .expect("Should have called setup_inputs first"),
         );
         let narrow = floats::narrow_sampler();
-        FmaMultiplierBidiRun {
+        FmaMultiplierRun {
             inputs: self.input_storage.freeze(),
             accumulators: operations::narrow_accumulators(rng),
             multiplier: narrow(rng),
@@ -65,19 +65,19 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBidiBenchm
     }
 
     type Run<'run>
-        = FmaMultiplierBidiRun<Storage::Frozen<'run>, ILP>
+        = FmaMultiplierRun<Storage::Frozen<'run>, ILP>
     where
         Self: 'run;
 }
 
-/// [`BenchmarkRun`] of [`FmaMultiplierBidi`]
-struct FmaMultiplierBidiRun<I: Inputs, const ILP: usize> {
+/// [`BenchmarkRun`] of [`FmaMultiplier`]
+struct FmaMultiplierRun<I: Inputs, const ILP: usize> {
     inputs: I,
     accumulators: [I::Element; ILP],
     multiplier: I::Element,
 }
 //
-impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierBidiRun<Storage, ILP> {
+impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierRun<Storage, ILP> {
     type Float = Storage::Element;
 
     #[inline]

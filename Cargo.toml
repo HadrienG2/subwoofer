@@ -14,9 +14,9 @@ members = [
     "common",
     "div_denominator_min",
     "div_numerator_max",
-    "fma_addend_max",
+    "fma_addend",
     "fma_full_max_mul",
-    "fma_multiplier_bidi",
+    "fma_multiplier",
     "max",
     "mul_max",
     "sqrt_positive_max"
@@ -140,8 +140,8 @@ bench_all = [
     "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> MAX with x²%subnormal input
     "bench_div_numerator_max",   # DIV with x%subnormal numerator, normal denominator -> x%subnormal MAX
     "bench_div_denominator_min", # DIV with x%subnormal denominator, normal numerator -> x%infinite MIN
-    "bench_fma_addend_max",      # FMA with x%subnormal addend, normal multiplier & result -> normal MIN
-    "bench_fma_multiplier_bidi", # FMA with x%subnormal multiplier, normal addend & result
+    "bench_fma_addend",          # FMA with x%subnormal addend, normal multiplier & result -> normal MIN
+    "bench_fma_multiplier",      # FMA with x%subnormal multiplier, normal addend & result
     "bench_fma_full_max_mul",    # FMA with x%subnormal multiplier and addend, x²%subnormal result -> MAX with x²%subnormal input -> normal MUL
 ]
 
@@ -150,9 +150,9 @@ bench_all = [
 bench_add = ["dep:add"]
 bench_div_denominator_min = ["dep:div_denominator_min"]
 bench_div_numerator_max = ["dep:div_numerator_max"]
-bench_fma_addend_max = ["dep:fma_addend_max"]
+bench_fma_addend = ["dep:fma_addend"]
 bench_fma_full_max_mul = ["dep:fma_full_max_mul"]
-bench_fma_multiplier_bidi = ["dep:fma_multiplier_bidi"]
+bench_fma_multiplier = ["dep:fma_multiplier"]
 bench_max = ["dep:max"]
 bench_mul_max = ["dep:mul_max"]
 bench_sqrt_positive_max = ["dep:sqrt_positive_max"]
@@ -227,9 +227,9 @@ common.workspace = true
 criterion.workspace = true
 div_denominator_min = { path = "./div_denominator_min", optional = true }
 div_numerator_max = { path = "./div_numerator_max", optional = true }
-fma_addend_max = { path = "./fma_addend_max", optional = true }
+fma_addend = { path = "./fma_addend", optional = true }
 fma_full_max_mul = { path = "./fma_full_max_mul", optional = true }
-fma_multiplier_bidi = { path = "./fma_multiplier_bidi", optional = true }
+fma_multiplier = { path = "./fma_multiplier", optional = true }
 hwlocality.workspace = true
 max = { path = "./max", optional = true }
 mul_max = { path = "./mul_max", optional = true }

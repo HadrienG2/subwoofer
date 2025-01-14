@@ -277,10 +277,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "fma_addend_max"
+name = "fma_addend"
 version = "1.0.0"
 dependencies = [
  "common",
+ "pessimize",
  "rand",
 ]
 
@@ -293,7 +294,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fma_multiplier_bidi"
+name = "fma_multiplier"
 version = "1.0.0"
 dependencies = [
  "common",
@@ -677,9 +678,9 @@ dependencies = [
  "criterion",
  "div_denominator_min",
  "div_numerator_max",
- "fma_addend_max",
+ "fma_addend",
  "fma_full_max_mul",
- "fma_multiplier_bidi",
+ "fma_multiplier",
  "hwlocality",
  "max",
  "mul_max",

@@ -103,13 +103,13 @@ roles (multiplier or addend), we have more freedom in how we set up a dependency
 chains of FMA with a feedback path from the output of operation N to one of the
 inputs of operation N+1. This is what we chose:
 
-* In benchmark `fma_multiplier_bidi`, the input data is fed to a multiplier
-  argment of the FMA, multiplied by a constant factor, and alternatively added
-  and subtracted from an accumulator. This is effectively the same as the `add`
+* In benchmark `fma_multiplier`, the input data is fed to a multiplier argment
+  of the FMA, multiplied by a constant factor, and alternatively added and
+  subtracted from an accumulator. This is effectively the same as the `add`
   benchmark, just with a larger or smaller step, so for this pattern we can
   study the overhead of FMA with possibly subnormal multipliers in isolation,
   without taking corrective action to guard against non-normal outputs.
-* In benchmark `fma_addend_max`, input data is fed to the addend argument of the
+* In benchmark `fma_addend`, input data is fed to the addend argument of the
   FMA, and we add to it the current accumulator multiplied by a constant factor.
   The result then becomes the next accumulator. Unfortunately, depending on how
   we pick the constant factor, this factor is doomed to eventually overflow or
