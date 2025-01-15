@@ -45,9 +45,6 @@ pub trait Inputs: AsRef<[Self::Element]> {
 }
 //
 /// Like [`Inputs`] but allows unrestricted element mutation
-///
-/// Types implement [`Inputs`] but not [`InputsMut`] when they have some
-/// internal invariant that they need to preserve.
 pub trait InputsMut: Inputs + AsMut<[Self::Element]> {}
 
 /// Kind of [`InputStorage`] that we are dealing with
@@ -93,19 +90,7 @@ impl InputKind {
     }
 }
 
-/// Total number of inputs that get aggregated into a benchmark's accumulators
-///
-/// This accounts for the reuse of small in-register input datasets across all
-/// benchmark accumulators.
-pub fn accumulated_len<I: Inputs>(inputs: &I, ilp: usize) -> usize {
-    let mut result = inputs.as_ref().len();
-    if I::KIND.is_reused() {
-        result *= ilp;
-    }
-    result
-}
-
-// Implementations of InputStorage
+// Implementations of Inputs/InputsMut
 impl<T: FloatLike, const N: usize> Inputs for [T; N] {
     type Element = T;
 

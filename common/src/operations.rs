@@ -36,10 +36,10 @@ pub trait Benchmark {
     /// execute when processing the previously specified input dataset
     ///
     /// Most benchmarks consume one input element per computed operation, in
-    /// which case this will be [`inputs::accumulated_len(&input_storage,
-    /// ilp)`](crate::inputs::accumulated_len), with `input_storage` pointing to
-    /// the previously specified input storage and `ilp` set to this benchmark's
-    /// degree of accumulation instruction-level parallelism.
+    /// which case this will be [`accumulated_len(&input_storage,
+    /// ilp)`](accumulated_len), with `input_storage` pointing to the previously
+    /// specified input storage and `ilp` set to this benchmark's degree of
+    /// accumulation instruction-level parallelism.
     ///
     /// However, beware of benchmarks like `fma_full` which consume multiple
     /// input elements per computed operation.
@@ -139,6 +139,18 @@ pub trait BenchmarkRun {
     fn accumulators(&self) -> &[Self::Float];
 }
 
+/// Total number of inputs that get aggregated into a benchmark's accumulators
+///
+/// This accounts for the reuse of small in-register input datasets across all
+/// benchmark accumulators.
+pub fn accumulated_len<I: Inputs>(inputs: &I, ilp: usize) -> usize {
+    let mut result = inputs.as_ref().len();
+    if I::KIND.is_reused() {
+        result *= ilp;
+    }
+    result
+}
+
 /// Initialize accumulators with a random positive value in range [0.5; 2[
 #[inline]
 pub fn narrow_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
@@ -153,7 +165,7 @@ pub fn normal_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -
     std::array::from_fn::<_, ILP, _>(|_| normal(rng))
 }
 
-/// Benchmark skeleton for processing the dataset with N accumulators
+/// Benchmark skeleton for processing a dataset element-wise with N accumulators
 ///
 /// `hide_accumulators` should usually point to an instance of the
 /// [`hide_accumulators()`] function defined in this module. The only reason why
@@ -210,6 +222,54 @@ pub fn integrate<
         }
         for (&elem, acc) in remainder.iter().zip(accumulators.iter_mut()) {
             *acc = iter(*acc, elem);
+        }
+    }
+}
+
+/// Benchmark skeleton for processing a dataset pair-wise with N accumulators
+///
+/// This works a lot like [`integrate()`] except the dataset is first split in
+/// two halves, then we take pairs of elements from each half and integrate the
+/// resulting input pair into the accumulator in a single transaction.
+///
+/// This is useful for operations like `fma_addend` which treat inputs
+/// inhomogeneously and for operations like `fma_full` which require two inputs
+/// per elementary accumulation transaction.
+#[inline]
+pub fn integrate_pairs<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
+    accumulators: &mut [T; ILP],
+    mut hide_accumulators: impl FnMut(&mut [T; ILP]),
+    inputs: &I,
+    mut iter: impl Copy + FnMut(T, [T; 2]) -> T,
+) {
+    let inputs = inputs.as_ref();
+    let inputs_len = inputs.len();
+    assert_eq!(inputs_len % 2, 0);
+    let (left, right) = inputs.split_at(inputs_len / 2);
+    if I::KIND.is_reused() {
+        for (&elem1, &elem2) in left.iter().zip(right) {
+            for acc in accumulators.iter_mut() {
+                *acc = iter(*acc, [elem1, elem2]);
+            }
+            hide_accumulators(accumulators);
+        }
+    } else {
+        let left_chunks = left.chunks_exact(ILP);
+        let right_chunks = right.chunks_exact(ILP);
+        let left_remainder = left_chunks.remainder();
+        let right_remainder = right_chunks.remainder();
+        for (chunk1, chunk2) in left_chunks.zip(right_chunks) {
+            for ((&elem1, &elem2), acc) in chunk1.iter().zip(chunk2).zip(accumulators.iter_mut()) {
+                *acc = iter(*acc, [elem1, elem2]);
+            }
+            hide_accumulators(accumulators);
+        }
+        for ((&elem1, &elem2), acc) in left_remainder
+            .iter()
+            .zip(right_remainder)
+            .zip(accumulators.iter_mut())
+        {
+            *acc = iter(*acc, [elem1, elem2]);
         }
     }
 }

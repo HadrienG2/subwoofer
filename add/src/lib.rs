@@ -35,7 +35,7 @@ struct AddBenchmark<Storage: InputsMut, const ILP: usize> {
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for AddBenchmark<Storage, ILP> {
     fn num_operations(&self) -> usize {
-        inputs::accumulated_len(&self.input_storage, ILP)
+        operations::accumulated_len(&self.input_storage, ILP)
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
