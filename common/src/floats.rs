@@ -306,6 +306,8 @@ where
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
+    const FINITE_EXPS: Range<i32> = f32::FINITE_EXPS;
+
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
         if WIDTH == 1 {
             f32::MIN_VECTORIZABLE_ILP
@@ -391,6 +393,8 @@ where
         #[inline]
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
+
+    const FINITE_EXPS: Range<i32> = f64::FINITE_EXPS;
 
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
         if WIDTH == 1 {
