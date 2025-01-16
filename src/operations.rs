@@ -160,7 +160,7 @@ macro_rules! for_each_inputregs_and_ilp {
                     // has at most 32 float registers, so it does not make sense
                     // to compile for accumulator ILP >= 32 at this point in
                     // time as we would have no registers left for input.
-                    inputs::benchmark_registers::<_, $inputregs>() with {
+                    inputs::benchmark_registers() with {
                         common_config: {
                             rng: $rng,
                             operation: $operation,
@@ -177,7 +177,7 @@ macro_rules! for_each_inputregs_and_ilp {
     // ...then instantiate all these ILP configurations, pick the one currently
     // selected by the outer ILP loop in benchmark_operation(), and decide if we
     // are going to run a benchmark with this degree of ILP or not...
-    ( inputs::benchmark_registers::< _, $inputregs:literal >() with {
+    ( inputs::benchmark_registers() with {
         common_config: {
             rng: $rng:expr,
             operation: $operation:ty,
@@ -198,7 +198,7 @@ macro_rules! for_each_inputregs_and_ilp {
                         group: $group,
                         benchmark,
                     };
-                    inputs::benchmark_registers::<_, $inputregs>(config, $inputregs);
+                    inputs::benchmark_registers(config, $inputregs);
                 }
             )*
             _ => unimplemented!("Asked to run with un-instantiated ILP {}", $selected_ilp),

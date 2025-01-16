@@ -63,7 +63,6 @@ pub(crate) fn benchmark_registers<B: Benchmark>(
         run_benchmark(
             &mut config.benchmark,
             config.group,
-            input_len,
             input_name,
             &mut config.rng,
         );
