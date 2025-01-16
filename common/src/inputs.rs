@@ -731,7 +731,6 @@ impl<'data, T: FloatLike> DataStream<'data, T> {
     /// [`generate_normal()`](GeneratorStream::generate_normal) implementation.
     pub fn scalar_at(&mut self, global_idx: usize) -> &mut T {
         debug_assert!(self.stream_idx < self.num_streams);
-        assert_eq!(global_idx % self.num_streams, self.stream_idx);
         &mut self.target[global_idx]
     }
 
