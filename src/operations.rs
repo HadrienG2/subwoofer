@@ -163,8 +163,10 @@ macro_rules! for_each_inputregs_and_ilp {
                     inputs::benchmark_registers() with {
                         common_config: {
                             rng: $rng,
+                            float: $float,
                             operation: $operation,
                             group: &mut group,
+                            inputregs: $inputregs,
                         },
                         selected_ilp: $selected_ilp,
                         instantiated_ilps: [1, 2, 4, 8, 16],
@@ -180,8 +182,10 @@ macro_rules! for_each_inputregs_and_ilp {
     ( inputs::benchmark_registers() with {
         common_config: {
             rng: $rng:expr,
+            float: $float:ty,
             operation: $operation:ty,
             group: $group:expr,
+            inputregs: $inputregs:literal,
         },
         selected_ilp: $selected_ilp:expr,
         instantiated_ilps: [ $($instantiated_ilp:literal),* ],
@@ -191,7 +195,7 @@ macro_rules! for_each_inputregs_and_ilp {
             $(
                 $instantiated_ilp => {
                     let benchmark = <$operation>::make_benchmark::<$instantiated_ilp>(
-                        [Default::default(); $inputregs]
+                        [<$float as Default>::default(); $inputregs]
                     );
                     let config = DataSourceConfiguration {
                         rng: $rng,
