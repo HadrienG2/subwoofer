@@ -286,7 +286,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fma_full_max_mul"
+name = "fma_full_max"
 version = "1.0.0"
 dependencies = [
  "common",
@@ -679,7 +679,7 @@ dependencies = [
  "div_denominator_min",
  "div_numerator_max",
  "fma_addend",
- "fma_full_max_mul",
+ "fma_full_max",
  "fma_multiplier",
  "hwlocality",
  "max",

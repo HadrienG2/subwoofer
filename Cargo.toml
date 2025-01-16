@@ -15,7 +15,7 @@ members = [
     "div_denominator_min",
     "div_numerator_max",
     "fma_addend",
-    "fma_full_max_mul",
+    "fma_full_max",
     "fma_multiplier",
     "max",
     "mul_max",
@@ -102,7 +102,7 @@ check = [
     "bench_sqrt_positive_max",   # Includes subnormal SQRT -> maybe-subnormal MAX
     "bench_div_numerator_max",   # Includes DIV with subnormal numerator -> subnormal MAX
     "bench_div_denominator_min", # Includes DIV with subnormal denominator -> infinite MIN
-    "bench_fma_full_max_mul",    # Includes subnormal FMA -> subnormal MAX -> normal MUL
+    "bench_fma_full_max",        # Includes subnormal FMA -> subnormal MAX
 ]
 
 # Run enough benchmarks to check how good/bad the generated code is
@@ -136,13 +136,13 @@ cargo_bench_support = ["criterion/cargo_bench_support", "criterion/plotters", "c
 bench_all = [
     "bench_add",                 # ADD with x%subnormal input, normal result, assumed to behave just like SUB
     "bench_max",                 # MAX with x%subnormal input, normal result, assumed to behave just like MIN
-    "bench_mul_max",             # MUL with x%subnormal input & result -> MAX with x%subnormal input
-    "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> MAX with x²%subnormal input
+    "bench_mul_max",             # MUL with x%subnormal input & result -> x%subnormal MAX
+    "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> x²%subnormal MAX
     "bench_div_numerator_max",   # DIV with x%subnormal numerator, normal denominator -> x%subnormal MAX
     "bench_div_denominator_min", # DIV with x%subnormal denominator, normal numerator -> x%infinite MIN
-    "bench_fma_addend",          # FMA with x%subnormal addend, normal multiplier & result -> normal MIN
+    "bench_fma_addend",          # FMA with x%subnormal addend, normal multiplier & result
     "bench_fma_multiplier",      # FMA with x%subnormal multiplier, normal addend & result
-    "bench_fma_full_max_mul",    # FMA with x%subnormal multiplier and addend, x²%subnormal result -> MAX with x²%subnormal input -> normal MUL
+    "bench_fma_full_max",        # FMA with x%subnormal multiplier and addend, x²%subnormal result -> x²%subnormal MAX
 ]
 
 # Fine-grained control over benchmark selection. Lets you speed up compilation
@@ -151,7 +151,7 @@ bench_add = ["dep:add"]
 bench_div_denominator_min = ["dep:div_denominator_min"]
 bench_div_numerator_max = ["dep:div_numerator_max"]
 bench_fma_addend = ["dep:fma_addend"]
-bench_fma_full_max_mul = ["dep:fma_full_max_mul"]
+bench_fma_full_max = ["dep:fma_full_max"]
 bench_fma_multiplier = ["dep:fma_multiplier"]
 bench_max = ["dep:max"]
 bench_mul_max = ["dep:mul_max"]
@@ -228,7 +228,7 @@ criterion.workspace = true
 div_denominator_min = { path = "./div_denominator_min", optional = true }
 div_numerator_max = { path = "./div_numerator_max", optional = true }
 fma_addend = { path = "./fma_addend", optional = true }
-fma_full_max_mul = { path = "./fma_full_max_mul", optional = true }
+fma_full_max = { path = "./fma_full_max", optional = true }
 fma_multiplier = { path = "./fma_multiplier", optional = true }
 hwlocality.workspace = true
 max = { path = "./max", optional = true }

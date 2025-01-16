@@ -115,9 +115,9 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaAddendRun<Storage, I
     }
 }
 
-/// Global input generator state for the input generator
+/// Global state of the input generator
 struct FmaAddendGenerator<T: FloatLike> {
-    /// "Base" multiplier of the FMA cycle
+    /// Initial multiplier of the FMA cycle
     multiplier: T,
 
     /// Inverse of `Self::multiplier`
@@ -136,7 +136,7 @@ impl<T: FloatLike, R: Rng> InputGenerator<T, R> for FmaAddendGenerator<T> {
     }
 }
 
-/// Per-stream state for this input generator
+/// Per-stream state of the input generator
 struct FmaAddendStream<'generator, T: FloatLike> {
     /// Back-reference to the common generator state
     generator: &'generator FmaAddendGenerator<T>,
@@ -199,11 +199,11 @@ enum Multiplier {
     Inverse,
 }
 //
-impl<T: FloatLike> FmaAddendStream<'_, T> {
-    fn update_multipler(&mut self) {
-        self.next_multiplier = match self.next_multiplier {
-            Multiplier::Direct => Multiplier::Inverse,
-            Multiplier::Inverse => Multiplier::Direct,
+impl Multiplier {
+    fn flip(&mut self) {
+        *self = match *self {
+            Self::Direct => Self::Inverse,
+            Self::Inverse => Self::Direct,
         }
     }
 }
@@ -217,7 +217,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
         // has no effect, so the only effect of integrating a subnormal is that
         // the accumulator will be multiplied by `multiplier` or
         // `inv_multiplier`.
-        self.update_multipler();
+        self.next_multiplier.flip();
     }
 
     #[inline]
@@ -229,7 +229,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
     ) -> T {
         // Update multiplier first because the new addend is added after the
         // current accumulator has been multiplied by the current multiplier.
-        self.update_multipler();
+        self.next_multiplier.flip();
         match self.state {
             FmaAddendState::Unconstrained => {
                 let value = narrow(rng);

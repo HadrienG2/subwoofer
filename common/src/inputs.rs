@@ -412,8 +412,8 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
                 MulDivState::InvertNormal(_) => {
                     let last = stream
                         .last()
-                        .expect("InvertNormal only reachable after >= 1 normal input");
-                    debug_assert!(last.is_normal());
+                        .expect("InvertNormal is only reachable after >= 1 normal inputs");
+                    assert!(last.is_normal());
                     *last = T::splat(1.0);
                 }
                 MulDivState::CancelSubnormal => {
@@ -424,18 +424,18 @@ pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
                     // run starts with a subnormal input).
                     let first = stream
                         .next()
-                        .expect("CancelSubnormal only reachable after >= 1 subnormal");
+                        .expect("CancelSubnormal is only reachable after >= 1 subnormal inputs");
                     if first.is_subnormal() {
                         return;
                     }
-                    debug_assert!(first.is_normal());
+                    assert!(first.is_normal());
 
                     // Otherwise, we should exchange the last subnormal input
                     // with the first normal input...
                     let last = stream
                             .next_back()
                             .expect("Last input should be subnormal, it cannot be the first input if it's normal");
-                    debug_assert!(last.is_subnormal());
+                    assert!(last.is_subnormal());
                     std::mem::swap(first, last);
 
                     // ...and fix up that new trailing normal input so that it
@@ -578,7 +578,7 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
         assert_eq!(target_len % 2, 0);
         let half_len = target_len / 2;
         let (left_target, right_target) = target.split_at_mut(half_len);
-        debug_assert_eq!(left_target.len(), right_target.len());
+        assert_eq!(left_target.len(), right_target.len());
 
         // Generate each element of each data stream: regular bulk where each
         // data stream gets one new element...

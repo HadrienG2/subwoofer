@@ -47,8 +47,8 @@ pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
         benchmark_operation::<_, fma_addend::FmaAddend>(&mut config);
         #[cfg(feature = "bench_fma_multiplier")]
         benchmark_operation::<_, fma_multiplier::FmaMultiplier>(&mut config);
-        #[cfg(feature = "bench_fma_full_max_mul")]
-        benchmark_operation::<_, fma_full_max_mul::FmaFullMaxMul>(&mut config);
+        #[cfg(feature = "bench_fma_full_max")]
+        benchmark_operation::<_, fma_full_max::FmaFullMax>(&mut config);
     }
 }
 

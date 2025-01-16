@@ -5,6 +5,7 @@ use rand::prelude::*;
 #[cfg(feature = "simd")]
 use std::simd::{cmp::SimdPartialOrd, LaneCount, Simd, StdFloat, SupportedLaneCount};
 use std::{
+    fmt::Debug,
     num::NonZeroUsize,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Range, Sub, SubAssign},
 };
@@ -14,6 +15,7 @@ pub trait FloatLike:
     Add<Output = Self>
     + AddAssign
     + Copy
+    + Debug
     + Default
     + Div<Output = Self>
     + DivAssign
