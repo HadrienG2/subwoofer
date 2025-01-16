@@ -1,8 +1,8 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
     floats::FloatLike,
-    inputs::{FloatSequence, FloatSet},
-    operations::{self, Benchmark, Operation},
+    inputs::{self, Inputs, InputsMut},
+    operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
 
@@ -10,7 +10,7 @@ use rand::Rng;
 #[derive(Clone, Copy)]
 pub struct DivDenominatorMin;
 //
-impl<T: FloatLike> Operation<T> for DivDenominatorMin {
+impl Operation for DivDenominatorMin {
     const NAME: &str = "div_denominator_min";
 
     // One register for the upper bound
@@ -21,80 +21,94 @@ impl<T: FloatLike> Operation<T> for DivDenominatorMin {
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = 1 + (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
-        DivDenominatorMinBenchmark {
-            accumulators: [Default::default(); ILP],
+    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+        DivDenominatorMinBenchmark::<_, ILP> {
+            input_storage,
+            num_subnormals: None,
         }
     }
 }
 
-/// [`Benchmark`] of [`MulMax`]
-#[derive(Clone, Copy)]
-struct DivDenominatorMinBenchmark<T: FloatLike, const ILP: usize> {
-    accumulators: [T; ILP],
+/// [`Benchmark`] of [`DivDenominatorMin`]
+struct DivDenominatorMinBenchmark<Storage: InputsMut, const ILP: usize> {
+    input_storage: Storage,
+    num_subnormals: Option<usize>,
 }
 //
-impl<T: FloatLike, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<T, ILP> {
-    type Float = T;
+impl<Storage: InputsMut, const ILP: usize> Benchmark for DivDenominatorMinBenchmark<Storage, ILP> {
+    fn num_operations(&self) -> usize {
+        operations::accumulated_len(&self.input_storage, ILP)
+    }
 
-    fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize {
-        inputs.reused_len(ILP)
+    fn setup_inputs(&mut self, num_subnormals: usize) {
+        self.num_subnormals = Some(num_subnormals);
     }
 
     #[inline]
-    fn begin_run(self, rng: impl Rng) -> Self {
-        Self {
-            accumulators: operations::normal_accumulators(rng),
+    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+        inputs::generate_muldiv_inputs::<_, ILP>(
+            &mut self.input_storage,
+            rng,
+            self.num_subnormals
+                .expect("Should have called setup_inputs first"),
+            |prev_input| Storage::Element::splat(1.0) / prev_input,
+            |input_after_subnormal| input_after_subnormal * upper_bound::<Storage::Element>(),
+        );
+        DivDenominatorMinRun {
+            inputs: self.input_storage.freeze(),
+            accumulators: operations::narrow_accumulators(rng),
         }
     }
 
-    #[inline]
-    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
+    type Run<'run>
+        = DivDenominatorMinRun<Storage::Frozen<'run>, ILP>
     where
-        Inputs: FloatSequence<Element = T>,
-    {
+        Self: 'run;
+}
+
+/// [`BenchmarkRun`] of [`DivDenominatorMinBenchmark`]
+struct DivDenominatorMinRun<Storage: Inputs, const ILP: usize> {
+    inputs: Storage,
+    accumulators: [Storage::Element; ILP],
+}
+//
+impl<Storage: Inputs, const ILP: usize> BenchmarkRun for DivDenominatorMinRun<Storage, ILP> {
+    type Float = Storage::Element;
+
+    #[inline]
+    fn integrate_inputs(&mut self) {
         // No need to hide inputs for this benchmark, the compiler can't exploit
         // its knowledge that inputs are being reused
-        let upper_bound = upper_bound::<T>();
-        operations::integrate_full::<_, _, ILP, false>(
+        let upper_bound = upper_bound::<Storage::Element>();
+        operations::integrate::<_, _, ILP, false>(
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, false>,
-            inputs,
+            &mut self.inputs,
             move |acc, elem| {
-                // - If elem is subnormal, the ratio is likely to be infinite
-                //   but the MIN will get the accumulator back to normal range
-                // - If elem is normal, this is effectively a multiplicative
-                //   random walk of step [0.5; 2[ with an upper bound
-                //   * It is a multiplicative random walk because the
-                //     distribution of input values ensures that the
-                //     distribution of 1/elem is the same as that of elem, and
-                //     also (as a result) that repeatedly multiplying by elem
-                //     results in a multiplicative random walk.
-                //   * The random walk has a low chance of going below
-                //     T::MIN_POSITIVE because input values are distributed in
-                //     such a way that there is an equal chance of having elem
-                //     and 1/elem in the input data stream, preventing long-term
-                //     growth or shrinkage.
+                // - A normal input takes the accumulator from range [1/2; 2[ to
+                //   range [1/4; 4[. If it is followed by another normal input,
+                //   the input generation procedure forces it to be the inverse
+                //   of that previous number, taking the accumulator back to its
+                //   nominal range [1/2; 2[.
+                // - If elem is subnormal, the MIN makes the output normal
+                //   again, and equal to 4. It then stays at 4 for all further
+                //   subnormal inputs, then the next normal input is a value in
+                //   range [1/2; 2[ multiplied by 4, which is in range [2; 8[,
+                //   and dividing the saturated accumulator value of 4 by this
+                //   has the effect of shrinking the accumulator back to its
+                //   nominal range [1/2; 2[.
                 operations::hide_single_accumulator(acc / elem).fast_min(upper_bound)
             },
         );
     }
 
     #[inline]
-    fn accumulators(&self) -> &[T] {
+    fn accumulators(&self) -> &[Storage::Element] {
         &self.accumulators
     }
 }
 
-/// Upper bound that we impose on accumulator values
-///
-/// Dividing by a subnormal number can produce infinite results, so we use a MIN
-/// to get back to normal range. The upper bound should also allow us to avoid
-/// transient infinities when dividing by normal numbers, so we want
-/// `upper_bound / 0.5 < T::MAX`, i.e. `upper_bound > T::MAX / 2`.
-///
-/// On top of this fundamental limit, we add a /2 safety margin to protect
-/// ourselves against rounding issues in e.g. the RNG in use.
+/// Upper bound that is imposed on the accumulator value
 fn upper_bound<T: FloatLike>() -> T {
-    T::MAX / T::splat(4.0)
+    T::splat(4.0)
 }

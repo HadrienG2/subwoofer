@@ -2,16 +2,17 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of FMA with a possibly subnormal addend, followed by MAX"
+description = "Benchmark of FMA with a possibly subnormal addend"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "fma_addend_max"
+name = "fma_addend"
 repository.workspace = true
 version.workspace = true
 
 [dependencies]
 common.workspace = true
+pessimize.workspace = true
 rand.workspace = true
 
 [lib]

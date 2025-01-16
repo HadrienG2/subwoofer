@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of ADD/SUB"
+description = "Benchmark of FMA with a possibly subnormal multiplier"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "addsub"
+name = "fma_multiplier"
 repository.workspace = true
 version.workspace = true
 

@@ -1,12 +1,13 @@
 //! Abstraction over the various available floating-point data types
 
 use pessimize::Pessimize;
-use rand::{distributions::Uniform, prelude::*};
+use rand::prelude::*;
 #[cfg(feature = "simd")]
 use std::simd::{cmp::SimdPartialOrd, LaneCount, Simd, StdFloat, SupportedLaneCount};
 use std::{
+    fmt::Debug,
     num::NonZeroUsize,
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Range, Sub, SubAssign},
 };
 
 /// Floating-point type that can be natively processed by the CPU
@@ -14,58 +15,42 @@ pub trait FloatLike:
     Add<Output = Self>
     + AddAssign
     + Copy
+    + Debug
     + Default
     + Div<Output = Self>
     + DivAssign
     + Mul<Output = Self>
     + MulAssign
     + Neg<Output = Self>
+    + PartialEq
     + Pessimize
     + Sub<Output = Self>
     + SubAssign
+    + 'static
 {
-    /// Random distribution of positive normal IEEE-754 floats
+    /// Random distribution of positive IEEE-754 floats with a given exponent
+    /// range and uniformly random fraction bits
     ///
-    /// Our normal inputs follow the distribution of `2.0.pow(u)`, where `u`
-    /// follows a uniform distribution from -1 to 1. We use this distribution
-    /// because it has several good properties:
+    /// For example, if the provided exponent range is `0..1`, this will
+    /// generate any of the floating-point numbers in range `[1.0; 2.0[` with
+    /// equal probability.
     ///
-    /// - The numbers are close to 1, which is the optimum range for
-    ///   floating-point arithmetic:
-    ///     * Starting from a value of order of magnitude
-    ///       `2.0.powi(MANTISSA_DIGITS/2)`, we can randomly add and subtract
-    ///       numbers close to 1 for a long time before we run into significant
-    ///       precision issues (due to the accumulator becoming too large) or
-    ///       cancelation/underflow issues (due to the accumulator becoming too
-    ///       small)
-    ///     * Starting from a value of order of magnitude 1, we can multiply or
-    ///       divide by values close to 1 for a long time before hitting
-    ///       exponent overflow or underflow issues.
-    /// - The particular distribution chosen between 0.5 to 2.0 additionally
-    ///   ensures that repeatedly multiplying by numbers from this distribution
-    ///   results in a random walk: an accumulator that is repeatedly multiplied
-    ///   by such values should oscillate around its initial value in
-    ///   multiplicative steps of at most `* 2.0` or `/ 2.0` per iteration, with
-    ///   low odds of getting too large or too small if the RNG is working
-    ///   correctly. If the accumulator starts close to 1, we are well protected
-    ///   from exponent overflow and underflow during this random walk.
+    /// The specified exponent range should be a subset of the valid exponent
+    /// range `FINITE_EXP_RANGE.start..(FINITE_EXP_RANGE.end+1)`.
+    ///
+    /// Use the exponent range
+    /// `FINITE_EXP_RANGE.start..(FINITE_EXP_RANGE.start+1)` to generate mostly
+    /// subnormal numbers, but also occasionally zeros with a very low
+    /// probability of `2^-MANTISSA_BITS`.
     ///
     /// For SIMD types, we generate a vector of such floats.
     ///
-    /// This should be `#[inline]` because some benchmarks call this as part of
-    /// their initialization procedure.
-    fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self;
+    /// This should be `#[inline]` because the resulting RNG is critical to
+    /// benchmark performance when generating large input datasets.
+    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self;
 
-    /// Random distribution of positive subnormal floats
-    ///
-    /// These values are effectively treated as zeros by all of our current
-    /// benchmarks, therefore their exact distribution does not matter at this
-    /// point in time. We should just strive to evenly cover the space of all
-    /// possible subnormals, i.e. generate a subnormal value with uniformly
-    /// distributed random mantissa bits.
-    ///
-    /// For SIMD types, we generate a vector of such floats.
-    fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self;
+    /// Range of exponents that corresponds to finite (non-NaN/non-inf) numbers
+    const FINITE_EXPS: Range<i32>;
 
     /// Minimal number of accumulators of this type that the compiler needs to
     /// autovectorize the accumulation.
@@ -107,10 +92,9 @@ pub trait FloatLike:
     /// the timed benchmark loop.
     fn fast_max(self, other: Self) -> Self;
 
-    // We're also gonna need some float data & ops not exposed via std traits.
-    const MANTISSA_DIGITS: u32;
-    const MIN_POSITIVE: Self;
-    const MAX: Self;
+    // We're also gonna need some float data & ops not exposed via std traits
+    fn is_normal(self) -> bool;
+    fn is_subnormal(self) -> bool;
     //
     // Implementations of all of these functions must be marked `#[inline]` as
     // they will be called within the timed benchmark loop.
@@ -121,17 +105,33 @@ pub trait FloatLike:
 //
 impl FloatLike for f32 {
     #[inline]
-    fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let dist = Uniform::new(-1.0, 1.0);
+    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+        // Check that the specified exponent range is valid
+        assert!(exp_range.start >= Self::FINITE_EXPS.start);
+        assert!(exp_range.end <= Self::FINITE_EXPS.end + 1);
+        // From the binary32 wikipedia page
+        // https://en.wikipedia.org/wiki/Single-precision_floating-point_format
+        // we gather that an f32 has 23 low-order fraction bits.
+        let fraction_bits = 23;
+        let fraction_mask = (1 << fraction_bits) - 1;
+        // Then we translate our exponent range into an exponent bits range...
+        let exp_to_bits = |exp| ((exp - Self::FINITE_EXPS.start) as u32) << fraction_bits;
+        let exp_bits_range = exp_to_bits(exp_range.start)..exp_to_bits(exp_range.end);
         #[inline]
-        move |rng| 2.0f32.powf(rng.sample(dist))
+        move |rng| {
+            // Generate uniformly distributed random fraction bits
+            let fraction_bits = rng.gen::<u32>() & fraction_mask;
+            // Generate the representation of an exponent in the right range
+            let exp_bits = rng.gen_range(exp_bits_range.clone());
+            // Combine them to get a float with a random mantissa and the
+            // desired exponent range
+            f32::from_bits(fraction_bits | exp_bits)
+        }
     }
 
-    fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let dist = Uniform::new(2.0f32.powi(-149), 2.0f32.powi(-126));
-        #[inline]
-        move |rng| rng.sample(dist)
-    }
+    // From the binary32 wikipedia page
+    // https://en.wikipedia.org/wiki/Single-precision_floating-point_format
+    const FINITE_EXPS: Range<i32> = -127..128;
 
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
         if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
@@ -176,9 +176,13 @@ impl FloatLike for f32 {
         }
     }
 
-    const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
-    const MIN_POSITIVE: Self = f32::MIN_POSITIVE;
-    const MAX: Self = f32::MAX;
+    fn is_normal(self) -> bool {
+        f32::is_normal(self)
+    }
+
+    fn is_subnormal(self) -> bool {
+        f32::is_subnormal(self)
+    }
 
     #[inline]
     fn splat(x: f32) -> Self {
@@ -198,16 +202,33 @@ impl FloatLike for f32 {
 //
 impl FloatLike for f64 {
     #[inline]
-    fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let dist = Uniform::new(-1.0, 1.0);
+    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+        // Check that the specified exponent range is valid
+        assert!(exp_range.start >= Self::FINITE_EXPS.start);
+        assert!(exp_range.end <= Self::FINITE_EXPS.end + 1);
+        // From the binary64 wikipedia page
+        // https://en.wikipedia.org/wiki/Double-precision_floating-point_format
+        // we gather that an f64 has 52 low-order fraction bits...
+        let fraction_bits = 52;
+        let fraction_mask = (1u64 << fraction_bits) - 1;
+        // Then we translate our exponent range into an exponent bits range...
+        let exp_to_bits = |exp| ((exp - Self::FINITE_EXPS.start) as u64) << fraction_bits;
+        let exp_bits_range = exp_to_bits(exp_range.start)..exp_to_bits(exp_range.end);
         #[inline]
-        move |rng| 2.0f64.powf(rng.sample(dist))
+        move |rng| {
+            // Generate uniformly distributed random fraction bits
+            let fraction_bits = rng.gen::<u64>() & fraction_mask;
+            // Generate the representation of an exponent in the right range
+            let exp_bits = rng.gen_range(exp_bits_range.clone());
+            // Combine them to get a float with a random mantissa and the
+            // desired exponent range
+            f64::from_bits(fraction_bits | exp_bits)
+        }
     }
 
-    fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let dist = Uniform::new(2.0f64.powi(-1074), 2.0f64.powi(-1022));
-        move |rng| rng.sample(dist)
-    }
+    // From the binary64 wikipedia page
+    // https://en.wikipedia.org/wiki/Double-precision_floating-point_format
+    const FINITE_EXPS: Range<i32> = -1023..1024;
 
     const MIN_VECTORIZABLE_ILP: Option<NonZeroUsize> = const {
         if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
@@ -248,9 +269,13 @@ impl FloatLike for f64 {
         }
     }
 
-    const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
-    const MIN_POSITIVE: Self = f64::MIN_POSITIVE;
-    const MAX: Self = f64::MAX;
+    fn is_normal(self) -> bool {
+        f64::is_normal(self)
+    }
+
+    fn is_subnormal(self) -> bool {
+        f64::is_subnormal(self)
+    }
 
     #[inline]
     fn splat(x: f32) -> Self {
@@ -275,14 +300,9 @@ where
     Self: Pessimize + StdFloat,
 {
     #[inline]
-    fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f32::normal_sampler();
+    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+        let sampler = f32::sampler(exp_range);
         #[inline]
-        move |rng| std::array::from_fn(|_| sampler(rng)).into()
-    }
-
-    fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f32::subnormal_sampler();
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
@@ -335,9 +355,13 @@ where
         self.simd_gt(other).select(self, other)
     }
 
-    const MANTISSA_DIGITS: u32 = f32::MANTISSA_DIGITS;
-    const MIN_POSITIVE: Self = Self::from_array([f32::MIN_POSITIVE; WIDTH]);
-    const MAX: Self = Self::from_array([f32::MAX; WIDTH]);
+    fn is_normal(self) -> bool {
+        self[0].is_normal()
+    }
+
+    fn is_subnormal(self) -> bool {
+        self[0].is_subnormal()
+    }
 
     #[inline]
     fn splat(x: f32) -> Self {
@@ -362,14 +386,9 @@ where
     Self: Pessimize + StdFloat,
 {
     #[inline]
-    fn normal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f64::normal_sampler();
+    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+        let sampler = f64::sampler(exp_range);
         #[inline]
-        move |rng| std::array::from_fn(|_| sampler(rng)).into()
-    }
-
-    fn subnormal_sampler<R: Rng>() -> impl Fn(&mut R) -> Self {
-        let sampler = f64::subnormal_sampler();
         move |rng| std::array::from_fn(|_| sampler(rng)).into()
     }
 
@@ -422,9 +441,13 @@ where
         self.simd_gt(other).select(self, other)
     }
 
-    const MANTISSA_DIGITS: u32 = f64::MANTISSA_DIGITS;
-    const MIN_POSITIVE: Self = Self::from_array([f64::MIN_POSITIVE; WIDTH]);
-    const MAX: Self = Self::from_array([f64::MAX; WIDTH]);
+    fn is_normal(self) -> bool {
+        self[0].is_normal()
+    }
+
+    fn is_subnormal(self) -> bool {
+        self[0].is_subnormal()
+    }
 
     #[inline]
     fn splat(x: f32) -> Self {
@@ -439,5 +462,44 @@ where
     #[inline]
     fn sqrt(self) -> Self {
         <Self as StdFloat>::sqrt(self)
+    }
+}
+
+/// Random distribution of all possible normal numbers
+#[inline]
+pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
+    T::sampler::<R>((T::FINITE_EXPS.start + 1)..T::FINITE_EXPS.end)
+}
+
+/// Random distribution with all numbers in range [0.5; 2[
+///
+/// This is the basic distribution that we use when we want a tight exponent
+/// range, but still coverage of all possible mantissa patterns and
+/// positive/negative exponents.
+#[inline]
+pub fn narrow_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
+    T::sampler::<R>(-1..1)
+}
+
+/// Random distribution that can yield all subnormal numbers, but also has a
+/// small probability of yielding zero (1 / number of fraction bits of T)
+#[inline]
+pub fn subnormal_zero_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
+    T::sampler::<R>(T::FINITE_EXPS.start..(T::FINITE_EXPS.start + 1))
+}
+
+/// Random distribution of all possible subnormal numbers
+///
+/// Unlike `subnormal_zero_sampler()`, this will never yield zero, but may run
+/// slower as a result.
+#[inline]
+pub fn subnormal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
+    let subnormal_or_zero = subnormal_zero_sampler::<T, R>();
+    let zero = T::splat(0.0);
+    move |rng: &mut R| loop {
+        let result = subnormal_or_zero(rng);
+        if result != zero {
+            return result;
+        }
     }
 }

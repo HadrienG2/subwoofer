@@ -32,19 +32,15 @@ operation of interest in isolation.
 Adding or subtracting a subnormal number to a normal number produces a normal
 number, therefore the overhead of ADD/SUB can be studied in isolation. Because
 these two operations have identical performance characteristics on all known
-hardware, we have a single `addsub` benchmark that measures the average of the
-performances of ADD and SUB, which should be equal to the performance of either
-ADD or SUB in isolation.
-
-The resulting benchmark design allows us to easily ensure that the underlying
-accumulator does not experience unbounded growth, which would eventually take it
-to infinity.
+hardware, we have a single `add` benchmark that measures the average of ADD
+only, and it is assumed that SUB (or addition of the negation) has the same
+performance profile.
 
 ## MIN/MAX
 
 The maximum of a subnormal and a normal number is a normal number, therefore the
 overhead of MAX can be studied in isolation. This is done by the `max`
-benchmark. Sadly, MIN does not have this useful property. But its performance
+benchmark. Sadly, MIN does not have this useful property, but its performance
 characteristics are the same as those of MAX on all known hardware, so for now
 we will just assume that they have the same overhead and that measuring the
 performance of MAX is enough to know the performance of MIN.
@@ -74,9 +70,10 @@ for a few reasons:
   normal number of a reasonable order of magnitude without breaking the
   dependency chain is a lot messier than going from a subnormal to a normal
   number (can't just use a MAX, need to play weird tricks with the exponent bits
-  of the underlying IEEE-754 representation).
+  of the underlying IEEE-754 representation, which may cause unexpected CPU
+  overhead linked to integer/FP domain crossing).
 - The negative argument path of the libm `sqrt()` function that people actually
-  use is often at least partially handled in software, so getting to the
+  use is often partially or totally handled in software, so getting to the
   hardware overhead is difficult, and even if we manage it won't be
   representative of typical real-world performance.
 
@@ -108,14 +105,13 @@ roles (multiplier or addend), we have more freedom in how we set up a dependency
 chains of FMA with a feedback path from the output of operation N to one of the
 inputs of operation N+1. This is what we chose:
 
-* In benchmark `fma_multiplier_bidi`, the input data is fed to a multiplier
-  argment of the FMA, multiplied by a constant factor, and alternatively added
-  and subtracted from an accumulator. This is effectively the same as the
-  `addsub` benchmark, just with a larger or smaller step, so for this pattern we
-  can study the overhead of FMA with possibly subnormal multipliers in
-  isolation, without taking corrective action to guard against non-normal
-  outputs.
-* In benchmark `fma_addend_max`, input data is fed to the addend argument of the
+* In benchmark `fma_multiplier`, the input data is fed to a multiplier argment
+  of the FMA, multiplied by a constant factor, and alternatively added to and
+  subtracted from an accumulator. This is effectively the same as the `add`
+  benchmark, just with a larger or smaller step size, so for this pattern we can
+  study the overhead of FMA with possibly subnormal multipliers in isolation,
+  without taking corrective action to guard against non-normal outputs.
+* In benchmark `fma_addend`, input data is fed to the addend argument of the
   FMA, and we add to it the current accumulator multiplied by a constant factor.
   The result then becomes the next accumulator. Unfortunately, depending on how
   we pick the constant factor, this factor is doomed to eventually overflow or
@@ -127,28 +123,12 @@ inputs of operation N+1. This is what we chose:
   - If the constant factor is < 1, then for a stream of subnormal inputs the
     value of the acccumulator will decay and eventually become subnormal.
 
-  We picked the latter option, so we use a MAX as a corrective action to prevent
-  accumulators from decaying to subnormal range.
-* In benchmark `fma_full_max_mul`, two substreams of the input data are fed to
-  the addend argument of the FMA and one of its multiplier argument, with the
+  To prevent this, we actually alternate between multiplying by the chosen
+  constant factor and its inverse. This should not meaningfully affect that
+  measured performance characteristics.
+* In benchmark `fma_full_max`, two substreams of the input data are fed to the
+  addend argument of the FMA and one of its multiplier argument, with the
   feedback path taking the other multiplier argument. This configuration allows
   us to check if the CPU has a particularly hard time with FMAs that produce
-  subnormal outputs, but due to the low level of input data control it is the
-  only benchmark where we need not one but two corrective actions:
-
-  - When both data arguments are subnormal, the output of the FMA is subnormal,
-    so we need a MAX to take the accumulator back to normal range before feeding
-    it back to the next benchmark iteration.
-  - If both data arguments are always normal, the accumulator experiences
-    unbounded growth, so we need some corrective action to prevent it from
-    diverging to infinity. We could have use MIN, but the combination of a MAX
-    and a MIN (also called a "clamp") may or may not be handled specially by a
-    CPU ISA, so analysing the benchmark results would require target-specific
-    care. Instead, we used multiplication by a sufficiently small constant
-    factor, which ensures that even in this all-normal input scenario the
-    accumulator value cannot experience unbounded growth, only decay.
-
-  To get back to the raw overhead of the FMA from the outputs of this benchmark,
-  you therefore need to subtract the overhead of both a MAX and a MUL from it.
-  This can be most easily done by subtracting the timings of the `mul_max`
-  benchmark from its timings.
+  subnormal outputs. But precisely because we can get subnormal results, we need
+  a MAX to bring the accumulator back to normal range.

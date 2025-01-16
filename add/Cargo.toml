@@ -2,11 +2,11 @@
 authors.workspace = true
 autobenches = false
 categories.workspace = true
-description = "Benchmark of FMA with a possibly subnormal multiplier, used in an ADD/SUB pattern"
+description = "Benchmark of ADD (should be the same as SUB)"
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
-name = "fma_multiplier_bidi"
+name = "add"
 repository.workspace = true
 version.workspace = true
 

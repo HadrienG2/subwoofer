@@ -1,8 +1,8 @@
 use common::{
     arch::{ALLOWS_DIV_MEMORY_NUMERATOR, ALLOWS_DIV_OUTPUT_DENOMINATOR},
     floats::FloatLike,
-    inputs::{FloatSequence, FloatSet},
-    operations::{self, Benchmark, Operation},
+    inputs::{self, Inputs, InputsMut},
+    operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
 
@@ -10,7 +10,7 @@ use rand::Rng;
 #[derive(Clone, Copy)]
 pub struct DivNumeratorMax;
 //
-impl<T: FloatLike> Operation<T> for DivNumeratorMax {
+impl Operation for DivNumeratorMax {
     const NAME: &str = "div_numerator_max";
 
     // One register for the lower bound + a temporary on all CPU ISAs where DIV
@@ -23,92 +23,95 @@ impl<T: FloatLike> Operation<T> for DivNumeratorMax {
     // memory input for the numerator of a division?
     const AUX_REGISTERS_MEMOP: usize = 1 + (!ALLOWS_DIV_MEMORY_NUMERATOR) as usize;
 
-    fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
-        DivNumeratorMaxBenchmark {
-            accumulators: [Default::default(); ILP],
+    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+        DivNumeratorMaxBenchmark::<_, ILP> {
+            input_storage,
+            num_subnormals: None,
         }
     }
 }
 
-/// [`Benchmark`] of [`MulMax`]
-#[derive(Clone, Copy)]
-struct DivNumeratorMaxBenchmark<T: FloatLike, const ILP: usize> {
-    accumulators: [T; ILP],
+/// [`Benchmark`] of [`DivNumeratorMax`]
+struct DivNumeratorMaxBenchmark<Storage: InputsMut, const ILP: usize> {
+    input_storage: Storage,
+    num_subnormals: Option<usize>,
 }
 //
-impl<T: FloatLike, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<T, ILP> {
-    type Float = T;
+impl<Storage: InputsMut, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<Storage, ILP> {
+    fn num_operations(&self) -> usize {
+        operations::accumulated_len(&self.input_storage, ILP)
+    }
 
-    fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize {
-        inputs.reused_len(ILP)
+    fn setup_inputs(&mut self, num_subnormals: usize) {
+        self.num_subnormals = Some(num_subnormals);
     }
 
     #[inline]
-    fn begin_run(self, rng: impl Rng) -> Self {
-        Self {
-            accumulators: operations::normal_accumulators(rng),
+    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+        inputs::generate_muldiv_inputs::<_, ILP>(
+            &mut self.input_storage,
+            rng,
+            self.num_subnormals
+                .expect("Should have called setup_inputs first"),
+            |prev_input| prev_input,
+            |input_after_subnormal| input_after_subnormal * lower_bound::<Storage::Element>(),
+        );
+        DivNumeratorMaxRun {
+            inputs: self.input_storage.freeze(),
+            accumulators: operations::narrow_accumulators(rng),
         }
     }
 
-    #[inline]
-    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
+    type Run<'run>
+        = DivNumeratorMaxRun<Storage::Frozen<'run>, ILP>
     where
-        Inputs: FloatSequence<Element = T>,
-    {
+        Self: 'run;
+}
+
+/// [`BenchmarkRun`] of [`DivNumeratorMaxBenchmark`]
+struct DivNumeratorMaxRun<Storage: Inputs, const ILP: usize> {
+    inputs: Storage,
+    accumulators: [Storage::Element; ILP],
+}
+//
+impl<Storage: Inputs, const ILP: usize> BenchmarkRun for DivNumeratorMaxRun<Storage, ILP> {
+    type Float = Storage::Element;
+
+    #[inline]
+    fn integrate_inputs(&mut self) {
         // No need to hide inputs for this benchmark, the compiler can't exploit
         // its knowledge that inputs are being reused here
-        let lower_bound = lower_bound::<T>();
-        operations::integrate_full::<_, _, ILP, false>(
+        let lower_bound = lower_bound::<Storage::Element>();
+        operations::integrate::<_, _, ILP, false>(
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, false>,
-            inputs,
+            &mut self.inputs,
             move |acc, elem| {
-                // - If elem is subnormal, the MAX makes the output normal again
-                // - If elem is normal, this is a weird kind of random wolk
-                //   * ...but however weird, this walk is bounded on both sides
-                //     because by imposing a minimal accumulator value, we also
-                //     impose a lower bound on the denominator of the division,
-                //     and thus an upper limit to the ratio that will become the
-                //     next accumulator. See the docs of lower_bound below for a
-                //     longer demonstration.
+                // - A normal input takes the accumulator from range [1/2; 2[ to
+                //   range [1/4; 4[. If it is followed by another normal input,
+                //   the input generation procedure forces it to be a copy of
+                //   that previous number, so we're computing
+                //   input1/(input1/acc) = acc, taking the accumulator back to
+                //   its nominal range [1/2; 2[.
+                // - If elem is subnormal, the MAX makes the output normal
+                //   again, and equal to 0.25. It then stays at 0.25 for all
+                //   further subnormal inputs, then the next normal input is a
+                //   value in range [1/2; 2[ multiplied by 0.25, and dividing
+                //   this by the saturated accumulator value of 0.25 has the
+                //   effect of bringing the accumulator back to its nominal
+                //   range [1/2; 2[.
                 operations::hide_single_accumulator(elem / acc).fast_max(lower_bound)
             },
         );
     }
 
     #[inline]
-    fn accumulators(&self) -> &[T] {
+    fn accumulators(&self) -> &[Storage::Element] {
         &self.accumulators
     }
 }
 
-/// Lower bound that we impose on accumulator values
-///
-/// Dividing a subnormal number by our accumulator can produce a subnormal
-/// result, so we use a MAX to get back to normal range.
-///
-/// The lower bound that this MAX imposes should additionally ensure that the
-/// ratio of a subnormal number by the accumulator has a good chance of being a
-/// subnormal number other than 0, because some hardware has no issue with
-/// divisions that have a subnormal numerator but lead to a normal or zero
-/// result. However, there is a tradeoff here:
-///
-/// - When the accumulator is exactly 1.0, the output is a subnormal number if
-///   and only if the input is one.
-/// - As the accumulator grows above 1.0, dividing some subnormal inputs by the
-///   accumulator leads to a zero output. This becomes always true once the
-///   accumulator grows above 2^T::MANTISSA_DIGITS.
-/// - As the accumulator shrinks below 1.0, dividing some subnormal inputs by
-///   the accumulator leads to a normal output. This becomes always true once
-///   the accumulator shrinks below 2^-T::MANTISSA_DIGITS.
-/// - When we give the accumulator a lower bound, we also give it an upper
-///   bound: since elem cannot be higher than 2.0, given an initial accumulator
-///   value `acc`, the next accumulator value `elem / acc` cannot be higher than
-///   `2 / lower_bound`.
-///
-/// A lower bound that is at the multiplicative half-way point between 1.0 and
-/// 2^-T::MANTISSA_DIGITS seems like it strikes a good balance between these
-/// various concerns.
+/// Lower bound that is imposed on the accumulator value
 fn lower_bound<T: FloatLike>() -> T {
-    T::splat(2.0f32.powi(-(T::MANTISSA_DIGITS as i32) / 2))
+    T::splat(0.25)
 }

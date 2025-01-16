@@ -4,7 +4,7 @@ use crate::inputs::{self, DataSourceConfiguration};
 use common::{
     arch::{HAS_HARDWARE_FMA, MIN_FLOAT_REGISTERS},
     floats::FloatLike,
-    inputs::FloatSet,
+    inputs::{InputKind, Inputs},
     operations::Operation,
 };
 use criterion::Criterion;
@@ -30,8 +30,8 @@ pub(crate) struct TypeConfiguration<'criterion, 'memory_inputs, 'memory_input_na
 /// Benchmark all enabled operations for a certain data type
 #[inline(never)] // Faster build + easier profiling
 pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
-    #[cfg(feature = "bench_addsub")]
-    benchmark_operation::<_, addsub::AddSub>(&mut config);
+    #[cfg(feature = "bench_add")]
+    benchmark_operation::<_, add::Add>(&mut config);
     #[cfg(feature = "bench_max")]
     benchmark_operation::<_, max::Max>(&mut config);
     #[cfg(feature = "bench_mul_max")]
@@ -43,12 +43,12 @@ pub(crate) fn benchmark_all<T: FloatLike>(mut config: TypeConfiguration<T>) {
     #[cfg(feature = "bench_div_denominator_min")]
     benchmark_operation::<_, div_denominator_min::DivDenominatorMin>(&mut config);
     if HAS_HARDWARE_FMA {
-        #[cfg(feature = "bench_fma_addend_max")]
-        benchmark_operation::<_, fma_addend_max::FmaAddendMax>(&mut config);
-        #[cfg(feature = "bench_fma_multiplier_bidi")]
-        benchmark_operation::<_, fma_multiplier_bidi::FmaMultiplierBidi>(&mut config);
-        #[cfg(feature = "bench_fma_full_max_mul")]
-        benchmark_operation::<_, fma_full_max_mul::FmaFullMaxMul>(&mut config);
+        #[cfg(feature = "bench_fma_addend")]
+        benchmark_operation::<_, fma_addend::FmaAddend>(&mut config);
+        #[cfg(feature = "bench_fma_multiplier")]
+        benchmark_operation::<_, fma_multiplier::FmaMultiplier>(&mut config);
+        #[cfg(feature = "bench_fma_full_max")]
+        benchmark_operation::<_, fma_full_max::FmaFullMax>(&mut config);
     }
 }
 
@@ -86,13 +86,14 @@ macro_rules! for_each_ilp {
         match $selected_ilp {
             $(
                 $instantiated_ilp => {
-                    let benchmark = <$operation>::make_benchmark::<$instantiated_ilp>();
+                    let input_len = $input_storage.len();
+                    let benchmark = <$operation>::make_benchmark::<$instantiated_ilp>( &mut $input_storage[..] );
                     let config = DataSourceConfiguration {
                         rng: $rng,
                         group: $group,
                         benchmark,
                     };
-                    inputs::benchmark_memory( config, $input_storage );
+                    inputs::benchmark_memory( config, input_len );
                 }
             )*
             _ => unimplemented!("Asked to run with un-instantiated ILP {}", $selected_ilp),
@@ -189,13 +190,15 @@ macro_rules! for_each_inputregs_and_ilp {
         match $selected_ilp {
             $(
                 $instantiated_ilp => {
-                    let benchmark = <$operation>::make_benchmark::<$instantiated_ilp>();
+                    let benchmark = <$operation>::make_benchmark::<$instantiated_ilp>(
+                        [Default::default(); $inputregs]
+                    );
                     let config = DataSourceConfiguration {
                         rng: $rng,
                         group: $group,
                         benchmark,
                     };
-                    inputs::benchmark_registers::<_, $inputregs>(config);
+                    inputs::benchmark_registers::<_, $inputregs>(config, $inputregs);
                 }
             )*
             _ => unimplemented!("Asked to run with un-instantiated ILP {}", $selected_ilp),
@@ -221,7 +224,7 @@ fn make_inputregs_group<'criterion>(
 
 /// Benchmark a certain operation on data of a certain scalar/SIMD type
 #[inline(never)] // Faster build + easier profiling
-fn benchmark_operation<T: FloatLike, Op: Operation<T>>(type_config: &mut TypeConfiguration<T>) {
+fn benchmark_operation<T: FloatLike, Op: Operation>(type_config: &mut TypeConfiguration<T>) {
     // For each supported degree of instruction-level parallelism...
     for ilp in (0..=MIN_FLOAT_REGISTERS.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
         // Name this (type, benchmark, ilp) triplet
@@ -272,14 +275,14 @@ fn benchmark_operation<T: FloatLike, Op: Operation<T>>(type_config: &mut TypeCon
 
 /// Truth that we should benchmark a certain operation, with a certain degree of
 /// instruction-level parallelism, on a certain input data source
-fn should_check_ilp<Op, Inputs>(ilp: usize) -> bool
+fn should_check_ilp<Op, I>(ilp: usize) -> bool
 where
-    Inputs: FloatSet,
-    Op: Operation<Inputs::Element>,
+    I: Inputs,
+    Op: Operation,
 {
     // First eliminate configurations that cannot fit in available CPU registers
-    let non_accumulator_registers = if let Some(input_registers) = Inputs::NUM_REGISTER_INPUTS {
-        input_registers + Op::aux_registers_regop(input_registers)
+    let non_accumulator_registers = if let InputKind::ReusedRegisters { count } = I::KIND {
+        count + Op::aux_registers_regop(count)
     } else {
         Op::AUX_REGISTERS_MEMOP
     };

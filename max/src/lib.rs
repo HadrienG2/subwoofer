@@ -1,10 +1,10 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
     floats::FloatLike,
-    inputs::{FloatSequence, FloatSet},
-    operations::{self, Benchmark, Operation},
+    inputs::{self, Inputs, InputsMut},
+    operations::{self, Benchmark, BenchmarkRun, Operation},
 };
-use rand::Rng;
+use rand::prelude::*;
 
 /// Hardware maximum instruction with one data input.
 ///
@@ -22,7 +22,7 @@ use rand::Rng;
 #[derive(Clone, Copy)]
 pub struct Max;
 //
-impl<T: FloatLike> Operation<T> for Max {
+impl Operation for Max {
     const NAME: &str = "max";
 
     fn aux_registers_regop(_input_registers: usize) -> usize {
@@ -32,50 +32,75 @@ impl<T: FloatLike> Operation<T> for Max {
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>() -> impl Benchmark<Float = T> {
-        MaxBenchmark {
-            accumulators: [Default::default(); ILP],
+    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+        MaxBenchmark::<_, ILP> {
+            input_storage,
+            num_subnormals: None,
         }
     }
 }
 
 /// [`Benchmark`] of [`Max`]
-#[derive(Clone, Copy)]
-struct MaxBenchmark<T: FloatLike, const ILP: usize> {
-    accumulators: [T; ILP],
+struct MaxBenchmark<Storage: InputsMut, const ILP: usize> {
+    input_storage: Storage,
+    num_subnormals: Option<usize>,
 }
 //
-impl<T: FloatLike, const ILP: usize> Benchmark for MaxBenchmark<T, ILP> {
-    type Float = T;
+impl<Storage: InputsMut, const ILP: usize> Benchmark for MaxBenchmark<Storage, ILP> {
+    fn num_operations(&self) -> usize {
+        operations::accumulated_len(&self.input_storage, ILP)
+    }
 
-    fn num_operations<Inputs: FloatSet>(inputs: &Inputs) -> usize {
-        inputs.reused_len(ILP)
+    fn setup_inputs(&mut self, num_subnormals: usize) {
+        self.num_subnormals = Some(num_subnormals);
     }
 
     #[inline]
-    fn begin_run(self, rng: impl Rng) -> Self {
-        Self {
+    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+        inputs::generate_max_inputs(
+            self.input_storage.as_mut(),
+            rng,
+            self.num_subnormals
+                .expect("setup_inputs should have been called first"),
+        );
+        MaxRun {
+            inputs: self.input_storage.freeze(),
             accumulators: operations::normal_accumulators(rng),
         }
     }
 
-    #[inline]
-    fn integrate_inputs<Inputs>(&mut self, inputs: &mut Inputs)
+    type Run<'run>
+        = MaxRun<Storage::Frozen<'run>, ILP>
     where
-        Inputs: FloatSequence<Element = T>,
-    {
+        Self: 'run;
+}
+
+/// [`BenchmarkRun`] of [`Max`]
+struct MaxRun<I: Inputs, const ILP: usize> {
+    inputs: I,
+    accumulators: [I::Element; ILP],
+}
+//
+impl<I: Inputs, const ILP: usize> BenchmarkRun for MaxRun<I, ILP> {
+    type Float = I::Element;
+
+    #[inline]
+    fn integrate_inputs(&mut self) {
         // No need to hide inputs for this benchmark, the compiler can't exploit
         // its knowledge that inputs are being reused.
-        operations::integrate_full::<_, _, ILP, false>(
+        operations::integrate::<_, _, ILP, false>(
             &mut self.accumulators,
             operations::hide_accumulators::<_, ILP, true>,
-            inputs,
+            &mut self.inputs,
+            // MAX is unaffected by the order of magnitude of inputs, so this
+            // benchmark behaves homogeneously no matter what the order of
+            // magnitude of its normal inputs is.
             |acc, elem| acc.fast_max(elem),
         );
     }
 
     #[inline]
-    fn accumulators(&self) -> &[T] {
+    fn accumulators(&self) -> &[I::Element] {
         &self.accumulators
     }
 }

@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "addsub"
+name = "add"
 version = "1.0.0"
 dependencies = [
  "common",
@@ -277,7 +277,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "fma_addend_max"
+name = "fma_addend"
+version = "1.0.0"
+dependencies = [
+ "common",
+ "pessimize",
+ "rand",
+]
+
+[[package]]
+name = "fma_full_max"
 version = "1.0.0"
 dependencies = [
  "common",
@@ -285,15 +294,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fma_full_max_mul"
-version = "1.0.0"
-dependencies = [
- "common",
- "rand",
-]
-
-[[package]]
-name = "fma_multiplier_bidi"
+name = "fma_multiplier"
 version = "1.0.0"
 dependencies = [
  "common",
@@ -672,14 +673,14 @@ dependencies = [
 name = "subwoofer"
 version = "1.0.0"
 dependencies = [
- "addsub",
+ "add",
  "common",
  "criterion",
  "div_denominator_min",
  "div_numerator_max",
- "fma_addend_max",
- "fma_full_max_mul",
- "fma_multiplier_bidi",
+ "fma_addend",
+ "fma_full_max",
+ "fma_multiplier",
  "hwlocality",
  "max",
  "mul_max",
