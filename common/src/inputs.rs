@@ -507,7 +507,7 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
     ) {
         // Set up the interleaved data streams
         let mut streams: [_; MIN_FLOAT_REGISTERS] = std::array::from_fn(|_| generator.new_stream());
-        assert!(num_streams < streams.len());
+        assert!(num_streams <= streams.len());
         let streams = &mut streams[..num_streams];
 
         // Generate each element of each data stream
@@ -570,7 +570,7 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
     ) {
         // Set up the interleaved data streams
         let mut streams: [_; MIN_FLOAT_REGISTERS] = std::array::from_fn(|_| generator.new_stream());
-        assert!(num_streams < streams.len());
+        assert!(num_streams <= streams.len());
         let streams = &mut streams[..num_streams];
 
         // Split the input in two halves
@@ -775,7 +775,7 @@ fn element_generator<R: Rng, S: GeneratorStream<R>>(
     rng: &mut R,
     num_subnormals: usize,
 ) -> impl FnMut(&mut S) -> S::Float + '_ {
-    assert!(num_subnormals < target_len);
+    assert!(num_subnormals <= target_len);
     let narrow = floats::narrow_sampler::<S::Float, R>();
     let subnormal = floats::subnormal_sampler::<S::Float, R>();
     let mut pick_subnormal = subnormal_picker(target_len, num_subnormals);
@@ -802,7 +802,7 @@ fn subnormal_picker<R: Rng>(
     mut target_len: usize,
     mut num_subnormals: usize,
 ) -> impl FnMut(&mut R) -> bool {
-    assert!(num_subnormals < target_len);
+    assert!(num_subnormals <= target_len);
     move |rng| {
         debug_assert!(target_len > 0);
         let subnormal_pos = rng.gen_range(0..target_len);
