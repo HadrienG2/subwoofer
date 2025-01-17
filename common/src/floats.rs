@@ -472,7 +472,7 @@ where
 /// Random distribution of all possible normal numbers
 #[inline]
 pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    T::sampler::<R>((T::FINITE_EXPS.start + 1)..T::FINITE_EXPS.end)
+    T::sampler((T::FINITE_EXPS.start + 1)..T::FINITE_EXPS.end)
 }
 
 /// Random distribution with all numbers in range [0.5; 2[
@@ -482,14 +482,14 @@ pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
 /// positive/negative exponents.
 #[inline]
 pub fn narrow_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    T::sampler::<R>(-1..1)
+    T::sampler(-1..1)
 }
 
 /// Random distribution that can yield all subnormal numbers, but also has a
 /// small probability of yielding zero (1 / number of fraction bits of T)
 #[inline]
 pub fn subnormal_zero_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    T::sampler::<R>(T::FINITE_EXPS.start..(T::FINITE_EXPS.start + 1))
+    T::sampler(T::FINITE_EXPS.start..(T::FINITE_EXPS.start + 1))
 }
 
 /// Random distribution of all possible subnormal numbers
@@ -498,12 +498,57 @@ pub fn subnormal_zero_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
 /// slower as a result.
 #[inline]
 pub fn subnormal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    let subnormal_or_zero = subnormal_zero_sampler::<T, R>();
+    let subnormal_or_zero = subnormal_zero_sampler();
     let zero = T::splat(0.0);
     move |rng: &mut R| loop {
         let result = subnormal_or_zero(rng);
         if result != zero {
             return result;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::panic::UnwindSafe;
+
+    const NUM_SAMPLES: usize = 100;
+
+    fn assert_panics<T>(f: impl FnOnce() -> T + UnwindSafe) -> Result<(), TestCaseError> {
+        if let Err(_) = std::panic::catch_unwind(f) {
+            Ok(())
+        } else {
+            Err(TestCaseError::fail("this function should have panicked"))
+        }
+    }
+
+    fn test_sampler<T: FloatLike>(
+        mut rng: impl Rng,
+        exp_range: Range<i32>,
+    ) -> Result<(), TestCaseError> {
+        let invalid_range =
+            exp_range.start < T::FINITE_EXPS.start || exp_range.end > T::FINITE_EXPS.end + 1;
+        let make_sampler = || T::sampler(exp_range);
+        if invalid_range {
+            return assert_panics(make_sampler);
+        }
+        let sampler = make_sampler();
+        unimplemented!();
+        sampler(&mut rng);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sampler() {
+        let rng = rand::thread_rng();
+        test_sampler::<f32>(&mut rng);
+        test_sampler::<f64>(&mut rng);
+        #[cfg(feature = "simd")]
+        {
+            test_sampler::<Simd<f32, 4>>(&mut rng);
+            test_sampler::<Simd<f64, 2>>(&mut rng);
         }
     }
 }

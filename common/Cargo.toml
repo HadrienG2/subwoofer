@@ -19,5 +19,8 @@ pessimize.workspace = true
 rand.workspace = true
 target-features.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lib]
 bench = false
