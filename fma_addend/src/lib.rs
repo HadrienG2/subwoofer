@@ -49,7 +49,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
         let narrow = floats::narrow_sampler();
         let multiplier = narrow(rng);
-        let inv_multiplier = Storage::Element::splat(1.0) / multiplier;
+        let inv_multiplier = pessimize::hide(Storage::Element::splat(1.0) / multiplier);
         inputs::generate_input_pairs::<_, _, ILP>(
             &mut self.input_storage,
             rng,
@@ -100,9 +100,7 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaAddendRun<Storage, I
                 // - Normal input element generation is biased such that after
                 //   adding a quantity to the accumulator, the same quantity is
                 //   later subtracted back from it, with correct accounting of
-                //   the effect of multipliers.
-                //
-                // TODO: Check need for finer-grained optimization barriers
+                //   the effect of past multipliers.
                 acc.mul_add(multiplier, elem1)
                     .mul_add(inv_multiplier, elem2)
             },
@@ -173,7 +171,7 @@ enum FmaAddendState<T: FloatLike> {
         /// become `(acc0 + value) * multiplier` or `(acc0 + value) *
         /// inv_multiplier` on the next iteration, then go back to `acc0 +
         /// value` by virtue of being multiplied by the inverse of the previous
-        /// value, and subsequently keep flipping between these two values.
+        /// multiplier, and subsequently keep flipping between these two values.
         ///
         /// When the time comes to cancel out the previously added `value`, if
         /// `self.next_multipler` is the same as it was at the point where
@@ -261,7 +259,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
     fn finalize(self, mut stream: DataStream<'_, T>) {
         // The last added normal value cannot be canceled out, so make it zero
         // to enforce that the accumulator is back to its initial value at the
-        // end of the FMA cycle.
+        // end of the benchmark run.
         if let FmaAddendState::InvertNormal { global_idx, .. } = self.state {
             *stream.scalar_at(global_idx) = T::splat(0.0);
         }
