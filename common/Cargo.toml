@@ -20,6 +20,7 @@ rand.workspace = true
 target-features.workspace = true
 
 [dev-dependencies]
+num-traits.workspace = true
 proptest.workspace = true
 
 [lib]

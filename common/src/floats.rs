@@ -108,6 +108,7 @@ impl FloatLike for f32 {
     fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
         // Check that the specified exponent range is valid
         assert!(exp_range.start >= Self::FINITE_EXPS.start);
+        assert!(exp_range.start < exp_range.end);
         assert!(exp_range.end <= Self::FINITE_EXPS.end + 1);
         // From the binary32 wikipedia page
         // https://en.wikipedia.org/wiki/Single-precision_floating-point_format
@@ -205,6 +206,7 @@ impl FloatLike for f64 {
     fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
         // Check that the specified exponent range is valid
         assert!(exp_range.start >= Self::FINITE_EXPS.start);
+        assert!(exp_range.start < exp_range.end);
         assert!(exp_range.end <= Self::FINITE_EXPS.end + 1);
         // From the binary64 wikipedia page
         // https://en.wikipedia.org/wiki/Double-precision_floating-point_format
@@ -511,44 +513,284 @@ pub fn subnormal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::assert_panics;
+    use num_traits::{Float, NumCast};
     use proptest::prelude::*;
-    use std::panic::UnwindSafe;
+    use std::{num::FpCategory, slice};
 
+    /// Number of samples used in sampler tests
     const NUM_SAMPLES: usize = 100;
 
-    fn assert_panics<T>(f: impl FnOnce() -> T + UnwindSafe) -> Result<(), TestCaseError> {
-        if let Err(_) = std::panic::catch_unwind(f) {
-            Ok(())
-        } else {
-            Err(TestCaseError::fail("this function should have panicked"))
+    /// Reinterpret a FloatLike as an array of simpler scalar floats
+    trait FloatLikeExt: FloatLike {
+        type Scalar: Debug + Float;
+        fn as_scalars(&self) -> &[Self::Scalar];
+    }
+    //
+    impl FloatLikeExt for f32 {
+        type Scalar = f32;
+        fn as_scalars(&self) -> &[f32] {
+            slice::from_ref(self)
+        }
+    }
+    //
+    impl FloatLikeExt for f64 {
+        type Scalar = f64;
+        fn as_scalars(&self) -> &[f64] {
+            slice::from_ref(self)
+        }
+    }
+    //
+    #[cfg(feature = "simd")]
+    mod simd_as_scalars {
+        use super::*;
+        //
+        impl<const WIDTH: usize> FloatLikeExt for Simd<f32, WIDTH>
+        where
+            LaneCount<WIDTH>: SupportedLaneCount,
+            Self: Pessimize + StdFloat,
+        {
+            type Scalar = f32;
+            fn as_scalars(&self) -> &[f32] {
+                self.as_ref()
+            }
+        }
+        //
+        impl<const WIDTH: usize> FloatLikeExt for Simd<f64, WIDTH>
+        where
+            LaneCount<WIDTH>: SupportedLaneCount,
+            Self: Pessimize + StdFloat,
+        {
+            type Scalar = f64;
+            fn as_scalars(&self) -> &[f64] {
+                self.as_ref()
+            }
         }
     }
 
-    fn test_sampler<T: FloatLike>(
-        mut rng: impl Rng,
-        exp_range: Range<i32>,
-    ) -> Result<(), TestCaseError> {
-        let invalid_range =
-            exp_range.start < T::FINITE_EXPS.start || exp_range.end > T::FINITE_EXPS.end + 1;
-        let make_sampler = || T::sampler(exp_range);
-        if invalid_range {
-            return assert_panics(make_sampler);
+    /// Test properties common to all FloatLike values
+    fn test_value<T: FloatLikeExt>(x: T) -> Result<(), TestCaseError> {
+        // Test square root
+        for (&scalar, &sqrt_scalar) in x.as_scalars().iter().zip(x.sqrt().as_scalars()) {
+            match scalar.classify() {
+                FpCategory::Nan => prop_assert!(sqrt_scalar.is_nan()),
+                FpCategory::Infinite => prop_assert_eq!(sqrt_scalar, scalar),
+                FpCategory::Zero => {
+                    prop_assert_eq!(sqrt_scalar, <T::Scalar as NumCast>::from(0.0f32).unwrap())
+                }
+                FpCategory::Subnormal | FpCategory::Normal => {
+                    if scalar.is_sign_negative() {
+                        prop_assert!(sqrt_scalar.is_nan());
+                    } else {
+                        prop_assert_eq!(sqrt_scalar, scalar.sqrt());
+                    }
+                }
+            }
         }
-        let sampler = make_sampler();
-        unimplemented!();
-        sampler(&mut rng);
         Ok(())
     }
 
-    #[test]
-    fn test_sampler() {
-        let rng = rand::thread_rng();
-        test_sampler::<f32>(&mut rng);
-        test_sampler::<f64>(&mut rng);
-        #[cfg(feature = "simd")]
+    /// Test properties of f32-splatting
+    fn test_splat<T: FloatLikeExt>(f: f32) -> Result<(), TestCaseError> {
+        let x = T::splat(f);
+        // T may have a wider range than f32, which means that some subnormal
+        // f32s become normal Ts. Thus the only properties we can trust are...
+        // - Only subnormal f32s may become subnormal Ts
+        // - All normal f32s will become normal Ts
+        prop_assert!(!x.is_subnormal() || f.is_subnormal());
+        prop_assert!(!f.is_normal() || x.is_normal());
+        for &scalar in x.as_scalars() {
+            prop_assert_eq!(<f32 as NumCast>::from(scalar), Some(f));
+        }
+        test_value(x)?;
+        Ok(())
+    }
+    //
+    proptest! {
+        #[test]
+        fn splat(f: f32) {
+            test_splat::<f32>(f)?;
+            test_splat::<f64>(f)?;
+            #[cfg(feature = "simd")]
+            {
+                test_splat::<Simd<f32, 4>>(f)?;
+                test_splat::<Simd<f64, 2>>(f)?;
+            }
+        }
+    }
+
+    /// Test basic properties common to all samplers
+    fn test_sampler<T: FloatLikeExt>(
+        rng: &mut impl Rng,
+        exp_range: Range<i32>,
+    ) -> Result<(), TestCaseError> {
+        // Handle panics from invalid exponent ranges
+        let invalid_range = exp_range.start < T::FINITE_EXPS.start
+            || exp_range.end <= exp_range.start
+            || exp_range.end > T::FINITE_EXPS.end + 1;
+        let exp_range2 = exp_range.clone();
+        let make_sampler = || T::sampler(exp_range2);
+        if invalid_range {
+            return assert_panics(make_sampler);
+        }
+
+        // Check the sampler output
+        let sampler = make_sampler();
+        for _ in 0..NUM_SAMPLES {
+            let sample = sampler(rng);
+
+            // Global properties that can be queried via the FloatLike trait
+            if exp_range.end == T::FINITE_EXPS.end + 1 {
+                // Can have NaNs and +/-inf
+                if exp_range.start == T::FINITE_EXPS.end {
+                    // Definitiely NaN or +/-inf
+                    prop_assert!(!sample.is_subnormal());
+                    prop_assert!(!sample.is_normal());
+                }
+            } else {
+                // Neither NaN nor +/-inf
+                prop_assert!(exp_range.end <= T::FINITE_EXPS.end);
+                if exp_range.start == T::FINITE_EXPS.start {
+                    // Can have subnormal or 0
+                    if exp_range.end == T::FINITE_EXPS.start + 1 {
+                        // Definitely subnormal or 0
+                        prop_assert!(sample.is_subnormal());
+                    }
+                } else {
+                    // None of NaN, +/-inf, subnormal and 0
+                    prop_assert!(exp_range.start > T::FINITE_EXPS.start);
+                    prop_assert!(!sample.is_subnormal());
+                    prop_assert!(sample.is_normal());
+                }
+            }
+
+            // Properties of individual scalar elements
+            for scalar in sample.as_scalars() {
+                let (mut mantissa, mantissa_exponent, sign) = scalar.integer_decode();
+                prop_assert_eq!(sign, 1);
+                match scalar.classify() {
+                    FpCategory::Nan | FpCategory::Infinite => {
+                        prop_assert_eq!(exp_range.end, T::FINITE_EXPS.end + 1);
+                    }
+                    FpCategory::Zero | FpCategory::Subnormal => {
+                        prop_assert_eq!(exp_range.start, T::FINITE_EXPS.start);
+                    }
+                    FpCategory::Normal => {
+                        // Convert from the (mantissa, exponent) format provided
+                        // by num_traits to the (fraction, exponent) format that
+                        // we use inside of this module.
+                        let mut fraction_exponent = mantissa_exponent;
+                        while mantissa != 1 {
+                            mantissa /= 2;
+                            fraction_exponent += 1;
+                        }
+                        prop_assert!(exp_range.contains(&(fraction_exponent as i32)));
+                    }
+                }
+            }
+
+            // Other properties that any FloatLike should fulfill
+            test_value(sample)?;
+        }
+        Ok(())
+    }
+    //
+    /// Generate an exponent range that is valid for a certain FloatLike type
+    fn valid_exp_range<T: FloatLike>() -> impl Strategy<Value = Range<i32>> {
+        prop_oneof![
+            1 => Just(T::FINITE_EXPS.start..(T::FINITE_EXPS.start+1)),
+            3 => ((T::FINITE_EXPS.start+1)..T::FINITE_EXPS.end).prop_flat_map(|left| {
+                ((left + 1)..=T::FINITE_EXPS.end).prop_map(move |right| {
+                    left..right
+                })
+            }),
+            1 => Just(T::FINITE_EXPS.end..(T::FINITE_EXPS.end + 1)),
+        ]
+    }
+    //
+    /// Generate an exponent range that is likely to be valid for a certain
+    /// FloatLike type, but may not be
+    fn exp_range<T: FloatLike>() -> impl Strategy<Value = Range<i32>> {
+        prop_oneof![
+            4 => valid_exp_range::<T>(),
+            1 => any::<Range<i32>>()
+        ]
+    }
+    //
+    proptest! {
+        #[test]
+        fn sampler_f32(exp_range in exp_range::<f32>()) {
+            let mut rng = rand::thread_rng();
+            test_sampler::<f32>(&mut rng, exp_range.clone())?;
+            #[cfg(feature = "simd")]
+            test_sampler::<Simd<f32, 4>>(&mut rng, exp_range)?;
+        }
+
+        #[test]
+        fn sampler_f64(exp_range in exp_range::<f64>()) {
+            let mut rng = rand::thread_rng();
+            test_sampler::<f64>(&mut rng, exp_range.clone())?;
+            #[cfg(feature = "simd")]
+            test_sampler::<Simd<f64, 2>>(&mut rng, exp_range)?;
+        }
+    }
+
+    /// Test the binary and ternary operations of two FloatLike numbers
+    fn test_ops<T: FloatLikeExt>(
+        rng: &mut impl Rng,
+        exp_range: Range<i32>,
+    ) -> Result<(), TestCaseError> {
+        // Fast comparison operations
+        let sampler = T::sampler(exp_range);
+        let x = sampler(rng);
+        let y = sampler(rng);
+        let has_fast_ord =
+            x.as_scalars()
+                .iter()
+                .chain(y.as_scalars())
+                .all(|scalar| match scalar.classify() {
+                    FpCategory::Nan => false,
+                    FpCategory::Infinite | FpCategory::Subnormal | FpCategory::Normal => true,
+                    FpCategory::Zero => scalar.is_sign_positive(),
+                });
+        if has_fast_ord {
+            for ((&x, &y), (&fast_min, &fast_max)) in ((x.as_scalars().iter()).zip(y.as_scalars()))
+                .zip((x.fast_min(y).as_scalars().iter()).zip(x.fast_max(y).as_scalars()))
+            {
+                prop_assert_eq!(fast_min, x.min(y));
+                prop_assert_eq!(fast_max, x.max(y));
+            }
+        }
+
+        // Ternary operations
+        let z = sampler(rng);
+        for ((&x, &y), (&z, &fma)) in ((x.as_scalars().iter()).zip(y.as_scalars()))
+            .zip((z.as_scalars().iter()).zip(x.mul_add(y, z).as_scalars()))
         {
-            test_sampler::<Simd<f32, 4>>(&mut rng);
-            test_sampler::<Simd<f64, 2>>(&mut rng);
+            if x.is_nan() || y.is_nan() || z.is_nan() {
+                prop_assert!(fma.is_nan());
+            } else {
+                prop_assert_eq!(fma, x.mul_add(y, z));
+            }
+        }
+        Ok(())
+    }
+    //
+    proptest! {
+        #[test]
+        fn ops_f32(exp_range in valid_exp_range::<f32>()) {
+            let mut rng = rand::thread_rng();
+            test_ops::<f32>(&mut rng, exp_range.clone())?;
+            #[cfg(feature = "simd")]
+            test_ops::<Simd<f32, 4>>(&mut rng, exp_range)?;
+        }
+
+        #[test]
+        fn ops_f64(exp_range in valid_exp_range::<f64>()) {
+            let mut rng = rand::thread_rng();
+            test_ops::<f64>(&mut rng, exp_range.clone())?;
+            #[cfg(feature = "simd")]
+            test_ops::<Simd<f64, 2>>(&mut rng, exp_range)?;
         }
     }
 }
