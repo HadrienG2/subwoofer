@@ -91,12 +91,11 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for MulMaxRun<Storage, ILP>
                 //   of that previous number, taking the accumulator back to its
                 //   nominal range [1/2; 2[.
                 // - If elem is subnormal, the MAX makes the output normal
-                //   again, and equal to 0.25. It then stays at 0.25 for all
-                //   further subnormal inputs, then the next normal input is a
-                //   value in range [1/2; 2[ divided by 0.25, and multiplying
-                //   the saturated accumulator value of 0.25 by this has the
-                //   effect of taking the accumulator back to its nominal range
-                //   [1/2; 2[.
+                //   again, and equal to 1/4. It then stays at 1/4 for all
+                //   further subnormal inputs. Then the next normal input is a
+                //   value in range [1/2; 2[ divided by 1/4, and multiplying the
+                //   saturated accumulator value of 1/4 by this takes the
+                //   accumulator back to its nominal range [1/2; 2[.
                 operations::hide_single_accumulator(acc * elem).fast_max(lower_bound)
             },
         );

@@ -343,7 +343,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                     )
                 }
                 FmaFullMaxState::LowerBound => {
-                    // 1/4 * random(2, 8) = random(1/2, 2)
+                    // 1/4 * random(2..8) = random(1/2..2)
                     assert_eq!(lower_bound::<T>(), T::splat(0.25));
                     let _2to8 = T::sampler(1..3)(rng);
                     (_2to8, FmaFullMaxState::Narrow(_2to8 * lower_bound::<T>()))
@@ -424,7 +424,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                 let mut pairs = stream.into_pair_iter();
                 let [first_multiplier, _first_addend] = pairs
                     .next()
-                    .expect("LowerBound is only reachable after >= 1 normal inputs");
+                    .expect("LowerBound is only reachable after >= 1 all-subnormal input pair");
                 if first_multiplier.is_subnormal() {
                     return;
                 }
@@ -438,13 +438,14 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                 //
                 // - If we reached the LowerBound state, it implies that the
                 //   last multiplier is subnormal, zeroing out any previous
-                //   state from the accumulator.
+                //   state from the accumulator. The addend thus fully
+                //   determines the final accumulator state.
                 // - The former first multiplier, if normal, is guaranteed to be
                 //   in the same narrow range [1/2; 2[ that accumulators should
                 //   belong to. By adding it to the aforementioned subnormal
                 //   product, we end up with a Narrow initial accumulator again.
                 let [last_multiplier, last_addend] = pairs.next_back().expect(
-                    "Last input should be all-subnormal, it cannot be the first input if its multiplier is normal",
+                    "Last input pair should be all-subnormal, it cannot be the first input pair if its multiplier is normal",
                 );
                 assert!(last_multiplier.is_subnormal());
                 assert!(last_addend.is_subnormal());

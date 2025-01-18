@@ -94,11 +94,11 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for DivNumeratorMaxRun<Stor
                 //   input1/(input1/acc) = acc, taking the accumulator back to
                 //   its nominal range [1/2; 2[.
                 // - If elem is subnormal, the MAX makes the output normal
-                //   again, and equal to 0.25. It then stays at 0.25 for all
-                //   further subnormal inputs, then the next normal input is a
-                //   value in range [1/2; 2[ multiplied by 0.25, and dividing
-                //   this by the saturated accumulator value of 0.25 has the
-                //   effect of bringing the accumulator back to its nominal
+                //   again, and equal to lower bound 1/4. It then stays at 1/4
+                //   for all further subnormal inputs, then the next normal
+                //   input is a value in range [1/2; 2[ multiplied by 1/4, and
+                //   dividing this by the saturated accumulator value of 1/4 has
+                //   the effect of bringing the accumulator back to its nominal
                 //   range [1/2; 2[.
                 operations::hide_single_accumulator(elem / acc).fast_max(lower_bound)
             },
