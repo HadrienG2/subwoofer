@@ -5,6 +5,7 @@ use common::{
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
+use std::cell::RefCell;
 
 /// FMA with possibly subnormal addend
 #[derive(Clone, Copy)]
@@ -50,19 +51,21 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
         let narrow = floats::narrow_sampler();
         let multiplier = narrow(rng);
         let inv_multiplier = pessimize::hide(Storage::Element::splat(1.0) / multiplier);
+        let accumulators = operations::narrow_accumulators(rng);
         inputs::generate_input_pairs::<_, _, ILP>(
             &mut self.input_storage,
             rng,
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
             FmaAddendGenerator {
+                accumulators: RefCell::new(accumulators.into_iter()),
                 multiplier,
                 inv_multiplier,
             },
         );
         FmaAddendRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::narrow_accumulators(rng),
+            accumulators,
             multiplier,
             inv_multiplier,
         }
@@ -94,13 +97,24 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaAddendRun<Storage, I
             operations::hide_accumulators::<_, ILP, true>,
             &self.inputs,
             move |acc, [elem1, elem2]| {
-                // - By flipping between a multiplier and its inverse, we ensure
-                //   that the accumulator keeps the same order of magnitude over
-                //   time.
-                // - Normal input element generation is biased such that after
-                //   adding a quantity to the accumulator, the same quantity is
-                //   later subtracted back from it, with correct accounting of
-                //   the effect of past multipliers.
+                // - By alternating between a multiplier and its inverse, we
+                //   ensure that the accumulator keeps roughtly the same order
+                //   of magnitude over time.
+                //   * Unfortunately, the accumulator will drift slowly towards
+                //     higher or lower magnitudes, because the multiplier
+                //     inverse that we use cannot be exact (the inverse of an
+                //     IEEE-754 number only falls exactly on another IEEE-754
+                //     number when the original number is 1.0). That drift
+                //     should be eventually compensated.
+                // - Normal input element generation is biased such that...
+                //   * Adding a first normal addend to the accumulator results
+                //     in that accumulator becoming equal to the sum of two
+                //     narrow numbers.
+
+                //after adding a quantity to the
+                //     accumulator, the same quantity is later subtracted back
+                //     from it, with correct accounting of the effect of past
+                //     multipliers.
                 acc.mul_add(multiplier, elem1)
                     .mul_add(inv_multiplier, elem2)
             },
@@ -114,42 +128,89 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaAddendRun<Storage, I
 }
 
 /// Global state of the input generator
-struct FmaAddendGenerator<T: FloatLike> {
-    /// Initial multiplier of the FMA cycle
-    multiplier: T,
+///
+/// Will produce one valid data stream per initial accumulator value. Subsequent
+/// data streams are invalid and only suitable for use as placeholder values,
+/// they should not be manipulated.
+struct FmaAddendGenerator<AccIter: Iterator> {
+    /// Initial value of each accumulator
+    accumulators: RefCell<AccIter>,
 
-    /// Inverse of `Self::multiplier`
-    inv_multiplier: T,
+    /// Initial multiplier of the FMA cycle
+    multiplier: AccIter::Item,
+
+    /// Inverse of `multiplier`
+    inv_multiplier: AccIter::Item,
 }
 //
-impl<T: FloatLike, R: Rng> InputGenerator<T, R> for FmaAddendGenerator<T> {
-    type Stream<'a> = FmaAddendStream<'a, T>;
+impl<AccIter, R> InputGenerator<AccIter::Item, R> for FmaAddendGenerator<AccIter>
+where
+    AccIter: Iterator,
+    AccIter::Item: FloatLike,
+    R: Rng,
+{
+    type Stream<'a>
+        = FmaAddendStream<'a, AccIter>
+    where
+        Self: 'a;
 
     fn new_stream(&self) -> Self::Stream<'_> {
         FmaAddendStream {
             generator: self,
+            accumulator: self.accumulators.borrow_mut().next(),
             next_multiplier: Multiplier::Direct,
-            state: FmaAddendState::Unconstrained,
+            state: FmaAddendState::Increase,
         }
     }
 }
 
 /// Per-stream state of the input generator
-struct FmaAddendStream<'generator, T: FloatLike> {
+struct FmaAddendStream<'generator, AccIter>
+where
+    AccIter: Iterator,
+    AccIter::Item: FloatLike,
+{
     /// Back-reference to the common generator state
-    generator: &'generator FmaAddendGenerator<T>,
+    generator: &'generator FmaAddendGenerator<AccIter>,
+
+    /// Current accumulator value
+    accumulator: Option<AccIter::Item>,
 
     /// Next multiplier for this stream
     next_multiplier: Multiplier,
 
     /// Per-stream state machine
-    state: FmaAddendState<T>,
+    state: FmaAddendState<AccIter::Item>,
+}
+//
+/// What the next FMA operation is going to multiply the accumulator by
+///
+/// The FMA operation after that is going to cancel the effect out by
+/// multiplying the accumulator by the inverse of that number, then the next FMA
+/// operation will perform the same multiplication again, and so on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Multiplier {
+    /// Multiply by [`FmaAddendGenerator::multiplier`]
+    Direct,
+
+    /// Multiply by [`FmaAddendGenerator::inv_multiplier`]
+    Inverse,
+}
+//
+impl Multiplier {
+    /// Alternate between `multiplier` and `inv_multiplier
+    fn flip(&mut self) {
+        *self = match *self {
+            Self::Direct => Self::Inverse,
+            Self::Inverse => Self::Direct,
+        }
+    }
 }
 //
 /// Inner state machine of [`FmaAddendStream`]
 enum FmaAddendState<T: FloatLike> {
-    /// No constraint on the next normal value
-    Unconstrained,
+    /// Next normal FMA addend should turn the accumulator into twice a narrow number
+    Increase,
 
     /// Next normal value should cancel out the accumulator change caused by the
     /// previously added normal input value
@@ -183,38 +244,35 @@ enum FmaAddendState<T: FloatLike> {
     },
 }
 //
-/// What the next FMA operation is going to multiply the accumulator by
-///
-/// The FMA operation after that is going to cancel the effect out by
-/// multiplying the accumulator by the inverse of that number, then the next FMA
-/// operation will perform the same multiplication again, and so on.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Multiplier {
-    /// Multiply by `FmaAddendGenerator::multiplier`
-    Direct,
-
-    /// Multiply by `FmaAddendGenerator::inv_multiplier`
-    Inverse,
-}
-//
-impl Multiplier {
-    fn flip(&mut self) {
-        *self = match *self {
-            Self::Direct => Self::Inverse,
-            Self::Inverse => Self::Direct,
-        }
+impl<AccIter> FmaAddendStream<'_, AccIter>
+where
+    AccIter: Iterator,
+    AccIter::Item: FloatLike,
+{
+    /// Access the internal accumulator tracker or die trying
+    fn accumulator(&mut self) -> &mut AccIter::Item {
+        self.accumulator
+            .as_mut()
+            .expect("Attempted to use an invalid input data stream")
     }
 }
 //
-impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
-    type Float = T;
+impl<AccIter, R> GeneratorStream<R> for FmaAddendStream<'_, AccIter>
+where
+    AccIter: Iterator,
+    AccIter::Item: FloatLike,
+    R: Rng,
+{
+    type Float = AccIter::Item;
 
     #[inline]
     fn record_subnormal(&mut self) {
         // Adding a subnormal number to an accumulator of order of magnitude ~1
-        // has no effect, so the only effect of integrating a subnormal is that
-        // the accumulator will be multiplied by `multiplier` or
-        // `inv_multiplier`.
+        // has no effect because that's below the mantissa resolution of T, so
+        // the only effect of integrating a subnormal addend is that the
+        // accumulator will be multiplied by `multiplier` or `inv_multiplier`.
+        let multiplier = self.next_multiplier();
+        *self.accumulator() *= multiplier;
         self.next_multiplier.flip();
     }
 
@@ -223,11 +281,13 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
         &mut self,
         global_idx: usize,
         rng: &mut R,
-        mut narrow: impl FnMut(&mut R) -> T,
-    ) -> T {
+        mut narrow: impl FnMut(&mut R) -> Self::Float,
+    ) -> Self::Float {
+        self.next_multiplier.flip();
+
         // Update multiplier first because the new addend is added after the
         // current accumulator has been multiplied by the current multiplier.
-        self.next_multiplier.flip();
+        self.multiply();
         match self.state {
             FmaAddendState::Unconstrained => {
                 let value = narrow(rng);
@@ -256,12 +316,12 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
         }
     }
 
-    fn finalize(self, mut stream: DataStream<'_, T>) {
+    fn finalize(self, mut stream: DataStream<'_, Self::Float>) {
         // The last added normal value cannot be canceled out, so make it zero
         // to enforce that the accumulator is back to its initial value at the
         // end of the benchmark run.
         if let FmaAddendState::InvertNormal { global_idx, .. } = self.state {
-            *stream.scalar_at(global_idx) = T::splat(0.0);
+            *stream.scalar_at(global_idx) = Self::Float::splat(0.0);
         }
     }
 }
