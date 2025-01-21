@@ -41,11 +41,13 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
         let streams = &mut streams[..num_streams];
 
         // Generate each element of each data stream
-        let mut generate_element = element_generator(target.len(), rng, num_subnormals);
+        let mut generate_element = element_generator(num_subnormals, target.len(), rng);
         let mut target_chunks = target.chunks_exact_mut(num_streams);
+        let mut global_idx = 0;
         for chunk in target_chunks.by_ref() {
             for (target, stream) in chunk.iter_mut().zip(streams.iter_mut()) {
-                *target = generate_element(stream);
+                *target = generate_element(stream, global_idx);
+                global_idx += 1;
             }
         }
         for (target, stream) in target_chunks
@@ -53,7 +55,8 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
             .iter_mut()
             .zip(streams.iter_mut())
         {
-            *target = generate_element(stream);
+            *target = generate_element(stream, global_idx);
+            global_idx += 1;
         }
 
         // Tweak final data streams to enforce a perfect accumulator reset
@@ -112,9 +115,12 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
 
         // Generate each element of each data stream: regular bulk where each
         // data stream gets one new element...
-        let mut generate_element = element_generator(target_len, rng, num_subnormals);
+        let mut generate_element = element_generator(num_subnormals, target_len, rng);
         let mut left_chunks = left_target.chunks_exact_mut(num_streams);
         let mut right_chunks = right_target.chunks_exact_mut(num_streams);
+        let left_start = 0;
+        let right_start = half_len;
+        let mut offset = 0;
         'chunks: loop {
             match (left_chunks.next(), right_chunks.next()) {
                 (Some(left_chunk), Some(right_chunk)) => {
@@ -123,8 +129,9 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
                         .zip(right_chunk)
                         .zip(streams.iter_mut())
                     {
-                        *left_elem = generate_element(stream);
-                        *right_elem = generate_element(stream);
+                        *left_elem = generate_element(stream, left_start + offset);
+                        *right_elem = generate_element(stream, right_start + offset);
+                        offset += 1;
                     }
                 }
                 (None, None) => break 'chunks,
@@ -142,8 +149,9 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
             'elems: loop {
                 match ((left_elems.next(), right_elems.next()), streams.next()) {
                     ((Some(left_elem), Some(right_elem)), Some(stream)) => {
-                        *left_elem = generate_element(stream);
-                        *right_elem = generate_element(stream);
+                        *left_elem = generate_element(stream, left_start + offset);
+                        *right_elem = generate_element(stream, right_start + offset);
+                        offset += 1;
                     }
                     ((None, None), Some(_)) => break 'elems,
                     ((Some(_), None), _) | ((None, Some(_)), _) => {
@@ -242,17 +250,18 @@ pub trait GeneratorStream<R: Rng> {
     fn finalize(self, stream: DataStream<'_, Self::Float>);
 }
 
-/// Single input data stream in the context of a global data set
+/// Single input data stream in the context of a global data set composed of
+/// multiple interleaved data streams.
 ///
 /// Can be interpreted either as a stream of scalar elements of type T, or pairs
-/// thereof. See the `TypedStream`
-pub struct DataStream<'data, T: FloatLike> {
+/// thereof. Only one interpretation is correct for a particular data set.
+pub struct DataStream<'data, T> {
     target: &'data mut [T],
     stream_idx: usize,
     num_streams: usize,
 }
 //
-impl<'data, T: FloatLike> DataStream<'data, T> {
+impl<'data, T> DataStream<'data, T> {
     /// Access a scalar element by global position
     ///
     /// The specified global index must belong to the data stream of interest.
@@ -295,30 +304,25 @@ impl<'data, T: FloatLike> DataStream<'data, T> {
 
 /// Recipe for iteratively producing substreams of a broader dataset
 ///
-/// Given the total number of elements to be produced, the number of subnormal
-/// inputs within this global dataset, and a random number generator, this
-/// produces a function that, given the state of a particular substream of the
-/// dataset, produces the next element of this substream.
+/// This produces a function that, given the state of a particular substream of
+/// the dataset and the index of the next element, produces this element.
 fn element_generator<R: Rng, S: GeneratorStream<R>>(
+    num_subnormals: usize,
     target_len: usize,
     rng: &mut R,
-    num_subnormals: usize,
-) -> impl FnMut(&mut S) -> S::Float + '_ {
+) -> impl FnMut(&mut S, usize) -> S::Float + '_ {
     assert!(num_subnormals <= target_len);
     let narrow = floats::narrow_sampler::<S::Float, R>();
     let subnormal = floats::subnormal_sampler::<S::Float, R>();
-    let mut pick_subnormal = subnormal_picker(target_len, num_subnormals);
-    let mut global_idx = 0;
-    move |state: &mut S| {
+    let mut pick_subnormal = subnormal_picker(num_subnormals, target_len);
+    move |state: &mut S, global_idx: usize| {
         debug_assert!(global_idx < target_len);
-        let result = if pick_subnormal(rng) {
+        if pick_subnormal(rng) {
             state.record_subnormal();
             subnormal(rng)
         } else {
             state.generate_normal(global_idx, rng, &narrow)
-        };
-        global_idx += 1;
-        result
+        }
     }
 }
 
@@ -328,16 +332,141 @@ fn element_generator<R: Rng, S: GeneratorStream<R>>(
 /// Should be called exactly `target_len` times. Will yield `num_subnormals`
 /// times the value `true` and yield the value `false` the rest of the time.
 fn subnormal_picker<R: Rng>(
-    mut target_len: usize,
     mut num_subnormals: usize,
+    mut target_len: usize,
 ) -> impl FnMut(&mut R) -> bool {
     assert!(num_subnormals <= target_len);
     move |rng| {
         debug_assert!(target_len > 0);
+        debug_assert!(num_subnormals <= target_len);
         let subnormal_pos = rng.gen_range(0..target_len);
         let is_subnormal = subnormal_pos < num_subnormals;
         target_len -= 1;
         num_subnormals -= (is_subnormal) as usize;
         is_subnormal
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::assert_panics;
+    use proptest::{prelude::*, sample::SizeRange};
+    use std::{ops::Range, panic::AssertUnwindSafe};
+
+    proptest! {
+        /// Test the subnormal number picker
+        #[test]
+        fn subnormal_picker(
+            target_len in Range::from(SizeRange::default()),
+            num_subnormals in 0..SizeRange::default().end_excl(),
+        ) {
+            // Creation should panic if num_subnormals > target_len
+            let make_picker = || super::subnormal_picker(num_subnormals, target_len);
+            if num_subnormals > target_len {
+                return assert_panics(make_picker);
+            }
+            let mut picker = make_picker();
+
+            // Picker should yield the expected number of subnormals
+            let mut rng = rand::thread_rng();
+            let mut actual_subnormals = 0;
+            for _ in 0..target_len {
+                actual_subnormals += picker(&mut rng) as usize;
+            }
+            prop_assert_eq!(actual_subnormals, num_subnormals);
+
+            // In debug builds, excessive calls should be checked
+            if cfg!(debug_assertions) {
+                assert_panics(AssertUnwindSafe(|| picker(&mut rng)))?;
+            }
+        }
+    }
+
+    /// Given a reference to a slice element and the initial pointer of that
+    /// slice (as given by `slice.as_ptr()`), tell which element it its
+    fn index_of<T>(elem: &mut T, start: *const T) -> usize {
+        debug_assert!(start.is_aligned());
+        (elem as *mut T as usize - start as usize) / std::mem::size_of::<T>()
+    }
+
+    /// Expected indices of the elements of a stream in the matching subslice
+    fn expected_indices(stream_idx: usize, num_streams: usize) -> impl Iterator<Item = usize> {
+        (0..).skip(stream_idx).step_by(num_streams)
+    }
+
+    /// Dataset that can be evenly cut into N streams of scalars or pairs
+    fn num_streams_and_target(pairs: bool) -> impl Strategy<Value = (usize, Vec<u8>)> {
+        let default_sizes = SizeRange::default();
+        let scalars_per_stream_elem = 1 + pairs as usize;
+        (1usize..=MIN_FLOAT_REGISTERS).prop_flat_map(move |num_streams| {
+            let num_substreams = num_streams * scalars_per_stream_elem;
+            ((default_sizes.start() / num_substreams)..(default_sizes.end_excl() / num_substreams))
+                .prop_flat_map(move |stream_len| {
+                    (
+                        Just(num_streams),
+                        prop::collection::vec(any::<u8>(), num_substreams * stream_len),
+                    )
+                })
+        })
+    }
+
+    proptest! {
+        /// Test scalar iteration over data streams
+        #[test]
+        fn scalar_iteration((num_streams, mut target) in num_streams_and_target(false)) {
+            let initial = target.clone();
+            let target = &mut target[..];
+            let left_start = target.as_ptr();
+            debug_assert_eq!(target.len() % num_streams, 0);
+            for stream_idx in 0..num_streams {
+                let mut num_elems = 0;
+                for (elem, expected_idx) in (DataStream {
+                    target,
+                    stream_idx,
+                    num_streams,
+                })
+                .into_scalar_iter()
+                .zip(expected_indices(stream_idx, num_streams))
+                {
+                    prop_assert_eq!(index_of(elem, left_start), expected_idx);
+                    num_elems += 1;
+                }
+                prop_assert_eq!(num_elems, target.len() / num_streams);
+            }
+            prop_assert_eq!(target, initial);
+        }
+
+        /// Test pairwise iteration over data streams
+        #[test]
+        fn pair_iteration((num_streams, mut target) in num_streams_and_target(false)) {
+            let initial = target.clone();
+            let target = &mut target[..];
+            let half_len = target.len() / 2;
+            if target.len() % 2 != 0 || half_len % num_streams != 0 {
+                return Ok(());
+            }
+            let left_start = target.as_ptr();
+            let right_start = left_start.wrapping_add(half_len);
+            for stream_idx in 0..num_streams {
+                let mut num_elems = 0;
+                for ([left, right], expected_idx) in (DataStream {
+                    target,
+                    stream_idx,
+                    num_streams,
+                })
+                .into_pair_iter()
+                .zip(expected_indices(stream_idx, num_streams))
+                {
+                    prop_assert_eq!(index_of(left, left_start), expected_idx);
+                    prop_assert_eq!(index_of(right, right_start), expected_idx);
+                    num_elems += 1;
+                }
+                prop_assert_eq!(num_elems, half_len / num_streams);
+            }
+            prop_assert_eq!(target, initial);
+        }
+    }
+
+    // TODO: Tests
 }
