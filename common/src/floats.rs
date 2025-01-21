@@ -477,7 +477,7 @@ pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
     T::sampler((T::FINITE_EXPS.start + 1)..T::FINITE_EXPS.end)
 }
 
-/// Random distribution with all numbers in range [0.5; 2[
+/// Random distribution with all numbers in range `[0.5; 2[`
 ///
 /// This is the basic distribution that we use when we want a tight exponent
 /// range, but still coverage of all possible mantissa patterns and
@@ -791,6 +791,47 @@ mod tests {
             test_ops::<f64>(&mut rng, exp_range.clone())?;
             #[cfg(feature = "simd")]
             test_ops::<Simd<f64, 2>>(&mut rng, exp_range)?;
+        }
+    }
+
+    /// Test standardized samplers
+    fn test_standard_samplers<T: FloatLikeExt>(rng: &mut impl Rng) {
+        let normal = normal_sampler::<T, _>();
+        for _ in 0..NUM_SAMPLES {
+            assert!(normal(rng).is_normal());
+        }
+
+        let narrow = narrow_sampler::<T, _>();
+        for _ in 0..NUM_SAMPLES {
+            let narrow = narrow(rng);
+            for &scalar in narrow.as_scalars() {
+                assert!(scalar >= <T::Scalar as NumCast>::from(0.5f32).unwrap());
+                assert!(scalar < <T::Scalar as NumCast>::from(2.0f32).unwrap());
+            }
+        }
+
+        let sub_zero = subnormal_zero_sampler::<T, _>();
+        for _ in 0..NUM_SAMPLES {
+            assert!(sub_zero(rng).is_subnormal());
+        }
+
+        let subnormal = subnormal_sampler::<T, _>();
+        for _ in 0..NUM_SAMPLES {
+            let subnormal = subnormal(rng);
+            assert!(subnormal.is_subnormal());
+            assert_ne!(subnormal, T::splat(0.0));
+        }
+    }
+    //
+    #[test]
+    fn standard_samplers() {
+        let mut rng = rand::thread_rng();
+        test_standard_samplers::<f32>(&mut rng);
+        test_standard_samplers::<f64>(&mut rng);
+        #[cfg(feature = "simd")]
+        {
+            test_standard_samplers::<Simd<f32, 4>>(&mut rng);
+            test_standard_samplers::<Simd<f64, 2>>(&mut rng);
         }
     }
 }
