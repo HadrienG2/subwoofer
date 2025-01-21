@@ -1,6 +1,6 @@
 use common::{
     floats::FloatLike,
-    inputs::{self, InputKind, Inputs, InputsMut},
+    inputs::{generators::max::generate_max_inputs, InputKind, Inputs, InputsMut},
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::prelude::*;
@@ -52,7 +52,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmar
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        inputs::generate_max_inputs(
+        generate_max_inputs(
             self.input_storage.as_mut(),
             rng,
             self.num_subnormals

@@ -1,0 +1,224 @@
+//! Input generator for benchmarks with a MUL/DIV pattern
+
+use super::{DataStream, GeneratorStream, InputGenerator};
+use crate::{floats::FloatLike, inputs::InputsMut};
+use rand::prelude::*;
+use std::marker::PhantomData;
+
+/// Generate normal and subnormal inputs for a benchmark that follows one of the
+/// `acc -> max(acc * input, 1/4)`, `acc -> min(acc / input, 4) ` and `acc ->
+/// max(input / acc, 1/4)` patterns, where the initial accumulator value is a
+/// positive number in the usual "narrow" range `[1/2; 2[`.
+///
+/// Overall, the general strategy to avoid unbounded accumulator growth or
+/// shrinkage is that...
+///
+/// - Generated normal inputs are in the same magnitude range as the initial
+///   accumulator value `[1/2; 2[`
+/// - Whenever a normal input is followed by another normal input, that second
+///   input is chosen to compensate the effect of the first one and reset the
+///   underlying accumulator back to its starting point (or close to it). For
+///   example, if we multiply an accumulator by a normal value and the next
+///   input value is normal, we will make it the inverse of the previous value.
+///   * The `invert_normal` callback indicates how, given a previous normal
+///     input, one can compute the next normal input that cancels out its effect
+///     on the accumulator.
+///   * We cannot do this with the last input of a data stream, therefore we
+///     force that input to be `1` instead (which does not modify the
+///     accumulator's order of magnitude), so that the accumulator goes back to
+///     its initial `[1/2; 2[` magnitude at the end of a benchmark run.
+/// - Every time we integrate a sequence of one or more subnormal values, we
+///   lose the original accumulator value and saturate to the lower/upper bound.
+///   To compensate for this, the next normal input is chosen to bring the
+///   accumulator back to its initial range. For example, if we multiply by a
+///   subnormal input and saturate to `0.25`, the next input is picked in range
+///   `[2; 8[` in order to bring the accumulator back to the `[1/2; 2[` range.
+///   * The `cancel_subnormal` callback indicates how, given the normal input
+///     that follows a subnormal value, one can grow or shrink it to cancel out
+///     the accumulator-clamping effect of the previous subnormal value and
+///     restore the accumulator to its initial [1/2; 2[ range.
+///   * We cannot do this if the last input value of a data stream is subnormal,
+///     therefore we impose that either the last input is normal (in which case
+///     this problem doesn't exist) or the first input is subnormal (in which
+///     case the initial accumulator value is immediately destroyed on the first
+///     iteration of the next run and it doesn't matter much that it has an
+///     unusual magnitude). This is achieved by enforcing that when the first
+///     input value is normal and the last input value is subnormal, they are
+///     swapped and what is now the new last normal input value is regenerated.
+pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
+    target: &mut Storage,
+    rng: &mut impl Rng,
+    num_subnormals: usize,
+    invert_normal: impl Fn(Storage::Element) -> Storage::Element + 'static,
+    cancel_subnormal: impl Fn(Storage::Element) -> Storage::Element + 'static,
+) {
+    super::generate_input_streams::<_, _, ILP>(
+        target,
+        rng,
+        num_subnormals,
+        MulDivGenerator {
+            invert_normal,
+            cancel_subnormal,
+            _unused: PhantomData,
+        },
+    );
+}
+
+/// Global state for this input generator
+struct MulDivGenerator<T: FloatLike, InvertNormal, CancelSubnormal>
+where
+    InvertNormal: Fn(T) -> T,
+    CancelSubnormal: Fn(T) -> T,
+{
+    /// Compute the inverse of a normal input
+    invert_normal: InvertNormal,
+
+    /// Modify a normal input to cancel the effect of a previous subnormal
+    cancel_subnormal: CancelSubnormal,
+
+    /// Mark T as used so rustc doesn't go mad
+    _unused: PhantomData<T>,
+}
+//
+impl<T: FloatLike, R: Rng, InvertNormal, CancelSubnormal> InputGenerator<T, R>
+    for MulDivGenerator<T, InvertNormal, CancelSubnormal>
+where
+    InvertNormal: Fn(T) -> T + 'static,
+    CancelSubnormal: Fn(T) -> T + 'static,
+{
+    type Stream<'a> = MulDivStream<'a, T, InvertNormal, CancelSubnormal>;
+
+    fn new_stream(&self) -> Self::Stream<'_> {
+        MulDivStream {
+            generator: self,
+            state: MulDivState::Unconstrained,
+        }
+    }
+}
+
+/// Per-stream state for this input generator
+struct MulDivStream<'generator, T: FloatLike, InvertNormal, CancelSubnormal>
+where
+    InvertNormal: Fn(T) -> T,
+    CancelSubnormal: Fn(T) -> T,
+{
+    /// Back-reference to the common generator state
+    generator: &'generator MulDivGenerator<T, InvertNormal, CancelSubnormal>,
+
+    /// Per-stream state machine
+    state: MulDivState<T>,
+}
+//
+/// Inner state machine of [`MulDivStream`]
+enum MulDivState<T: FloatLike> {
+    /// No constraint on the next normal value
+    Unconstrained,
+
+    /// Next normal value should cancel out the accumulator change caused by
+    /// the previous normal input value
+    InvertNormal(T),
+
+    /// Next normal value should cancel out the accumulator low/high-bound
+    /// clamping caused by the previous subnormal value
+    CancelSubnormal,
+}
+//
+impl<T: FloatLike, R: Rng, InvertNormal, CancelSubnormal> GeneratorStream<R>
+    for MulDivStream<'_, T, InvertNormal, CancelSubnormal>
+where
+    InvertNormal: Fn(T) -> T + 'static,
+    CancelSubnormal: Fn(T) -> T + 'static,
+{
+    type Float = T;
+
+    #[inline]
+    fn record_subnormal(&mut self) {
+        self.state = MulDivState::CancelSubnormal;
+    }
+
+    #[inline]
+    fn generate_normal(
+        &mut self,
+        _global_idx: usize,
+        rng: &mut R,
+        mut narrow: impl FnMut(&mut R) -> T,
+    ) -> T {
+        match self.state {
+            MulDivState::Unconstrained => {
+                let value = narrow(rng);
+                self.state = MulDivState::InvertNormal(value);
+                value
+            }
+            MulDivState::InvertNormal(value) => {
+                self.state = MulDivState::Unconstrained;
+                (self.generator.invert_normal)(value)
+            }
+            MulDivState::CancelSubnormal => {
+                self.state = MulDivState::Unconstrained;
+                (self.generator.cancel_subnormal)(narrow(rng))
+            }
+        }
+    }
+
+    fn finalize(self, stream: DataStream<'_, T>) {
+        let mut stream = stream.into_scalar_iter();
+        match self.state {
+            MulDivState::Unconstrained => {}
+            MulDivState::InvertNormal(_) => {
+                let last = stream
+                    .last()
+                    .expect("InvertNormal is only reachable after >= 1 normal inputs");
+                assert!(last.is_normal());
+                *last = T::splat(1.0);
+            }
+            MulDivState::CancelSubnormal => {
+                // A subnormal input brings the accumulator to an abnormal
+                // magnitude, so it can only be tolerated as the last input
+                // of the data stream if the resulting abnormal accumulator
+                // state is ignored by the next benchmark run (because that
+                // run starts with a subnormal input).
+                let first = stream
+                    .next()
+                    .expect("CancelSubnormal is only reachable after >= 1 subnormal inputs");
+                if first.is_subnormal() {
+                    return;
+                }
+                assert!(first.is_normal());
+
+                // Otherwise, we should exchange the last subnormal input
+                // with the first normal input...
+                let last = stream.next_back().expect(
+                    "Last input should be subnormal, it cannot be the first input if it's normal",
+                );
+                assert!(last.is_subnormal());
+                std::mem::swap(first, last);
+
+                // ...and fix up that new trailing normal input so that it
+                // is correct in the context of the previous normal input
+                // values at the end of the stream.
+                if let Some(second_to_last) = stream.next_back().copied() {
+                    if second_to_last.is_normal() {
+                        let num_prev_normals =
+                            stream.rev().take_while(|elem| elem.is_normal()).count();
+                        if num_prev_normals % 2 == 0 {
+                            // If there is an even number of inputs before
+                            // the second-to-last normal input, then this
+                            // normal input grows/shrinks the accumulator
+                            // and we should invert its effect to restore
+                            // the accumulator back to its initial value.
+                            *last = (self.generator.invert_normal)(second_to_last);
+                        } else {
+                            // If there is an odd number of inputs before
+                            // the second-to-last normal input, then this
+                            // second-to-last input brought the accumulator
+                            // back to its initial [1/2; 2[ range, and the
+                            // last normal input should keep the accumulator
+                            // in the same order of magnitude.
+                            *last = T::splat(1.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

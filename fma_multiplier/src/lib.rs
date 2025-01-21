@@ -1,7 +1,7 @@
 use common::{
     arch::{HAS_HARDWARE_NEGATED_FMA, HAS_MEMORY_OPERANDS},
     floats::{self, FloatLike},
-    inputs::{self, Inputs, InputsMut},
+    inputs::{generators::add::generate_add_inputs, Inputs, InputsMut},
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
@@ -50,7 +50,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBenchmark<
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        inputs::generate_add_inputs::<_, ILP>(
+        generate_add_inputs::<_, ILP>(
             &mut self.input_storage,
             rng,
             self.num_subnormals

@@ -1,6 +1,6 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
-    inputs::{self, Inputs, InputsMut},
+    inputs::{generators::add::generate_add_inputs, Inputs, InputsMut},
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
@@ -44,7 +44,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for AddBenchmark<Storage, I
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        inputs::generate_add_inputs::<_, ILP>(
+        generate_add_inputs::<_, ILP>(
             &mut self.input_storage,
             rng,
             self.num_subnormals

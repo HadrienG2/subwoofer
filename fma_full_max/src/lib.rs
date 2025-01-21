@@ -1,7 +1,10 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
     floats::FloatLike,
-    inputs::{self, DataStream, GeneratorStream, InputGenerator, Inputs, InputsMut},
+    inputs::{
+        generators::{generate_input_pairs, DataStream, GeneratorStream, InputGenerator},
+        Inputs, InputsMut,
+    },
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
@@ -50,7 +53,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaFullMaxBenchmark<Sto
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
         let accumulators = operations::narrow_accumulators(rng);
-        inputs::generate_input_pairs::<_, _, ILP>(
+        generate_input_pairs::<_, _, ILP>(
             &mut self.input_storage,
             rng,
             self.num_subnormals

@@ -1,7 +1,7 @@
 use common::{
     arch::{ALLOWS_DIV_MEMORY_NUMERATOR, ALLOWS_DIV_OUTPUT_DENOMINATOR},
     floats::FloatLike,
-    inputs::{self, Inputs, InputsMut},
+    inputs::{generators::muldiv::generate_muldiv_inputs, Inputs, InputsMut},
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
@@ -48,7 +48,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for DivNumeratorMaxBenchmar
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        inputs::generate_muldiv_inputs::<_, ILP>(
+        generate_muldiv_inputs::<_, ILP>(
             &mut self.input_storage,
             rng,
             self.num_subnormals

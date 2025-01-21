@@ -1,7 +1,10 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
     floats::{self, FloatLike},
-    inputs::{self, DataStream, GeneratorStream, InputGenerator, Inputs, InputsMut},
+    inputs::{
+        generators::{generate_input_pairs, DataStream, GeneratorStream, InputGenerator},
+        Inputs, InputsMut,
+    },
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
@@ -50,7 +53,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
         let narrow = floats::narrow_sampler();
         let multiplier = narrow(rng);
         let inv_multiplier = pessimize::hide(Storage::Element::splat(1.0) / multiplier);
-        inputs::generate_input_pairs::<_, _, ILP>(
+        generate_input_pairs::<_, _, ILP>(
             &mut self.input_storage,
             rng,
             self.num_subnormals
