@@ -414,7 +414,7 @@ mod tests {
     proptest! {
         /// Test scalar iteration over data streams
         #[test]
-        fn scalar_iteration((num_streams, mut target) in num_streams_and_target(false)) {
+        fn stream_scalar_iter((num_streams, mut target) in num_streams_and_target(false)) {
             let initial = target.clone();
             let target = &mut target[..];
             let left_start = target.as_ptr();
@@ -439,7 +439,7 @@ mod tests {
 
         /// Test pairwise iteration over data streams
         #[test]
-        fn pair_iteration((num_streams, mut target) in num_streams_and_target(false)) {
+        fn stream_pair_iter((num_streams, mut target) in num_streams_and_target(false)) {
             let initial = target.clone();
             let target = &mut target[..];
             let half_len = target.len() / 2;
@@ -464,6 +464,44 @@ mod tests {
                 }
                 prop_assert_eq!(num_elems, half_len / num_streams);
             }
+            prop_assert_eq!(target, initial);
+        }
+    }
+
+    /// Test access to a particular stream element
+    fn num_streams_target_and_idx() -> impl Strategy<Value = (usize, Vec<u8>, usize)> {
+        num_streams_and_target(false).prop_flat_map(|(num_streams, target)| {
+            let global_idx = if target.is_empty() {
+                any::<usize>().boxed()
+            } else {
+                prop_oneof![
+                    4 => 0..target.len(),
+                    1 => target.len()..usize::MAX,
+                ]
+                .boxed()
+            };
+            (Just(num_streams), Just(target), global_idx)
+        })
+    }
+    //
+    proptest! {
+        #[test]
+        fn stream_scalar_at((num_streams, mut target, global_idx) in num_streams_target_and_idx()) {
+            let initial = target.clone();
+            let target = &mut target[..];
+            let target_len = target.len();
+            let start = target.as_ptr();
+            let stream_idx = global_idx % num_streams;
+            let mut stream = DataStream {
+                target,
+                stream_idx,
+                num_streams,
+            };
+            let mut output_idx = || index_of(stream.scalar_at(global_idx), start);
+            if global_idx >= target_len {
+                return assert_panics(AssertUnwindSafe(output_idx));
+            }
+            prop_assert_eq!(output_idx(), global_idx);
             prop_assert_eq!(target, initial);
         }
     }
