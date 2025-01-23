@@ -105,6 +105,9 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
         generator: G,
         num_streams: usize,
     ) {
+        // Validate configuration
+        assert!(num_subnormals <= target.len());
+
         // Set up the interleaved data streams
         let mut streams: [_; MIN_FLOAT_REGISTERS] = std::array::from_fn(|_| generator.new_stream());
         assert!(num_streams <= streams.len());
@@ -633,12 +636,29 @@ mod tests {
         }
     }
 
+    /// Mostly-valid subnormal amounts, for a given total dataset length
+    fn num_subnormals(target_len: usize) -> impl Strategy<Value = usize> {
+        if target_len == 0 {
+            Just(0).boxed()
+        } else {
+            prop_oneof![
+                4 => 0..target_len,
+                1 => target_len..,
+            ]
+            .boxed()
+        }
+    }
+
     /// Inputs for an [`element_generator()`] test
     fn num_streams_and_subnormal_config(
         pairs: bool,
     ) -> impl Strategy<Value = (usize, usize, usize)> {
         num_streams_and_target_len(pairs).prop_flat_map(|(num_streams, target_len)| {
-            (Just(num_streams), 0..=target_len, Just(target_len))
+            (
+                Just(num_streams),
+                num_subnormals(target_len),
+                Just(target_len),
+            )
         })
     }
 
@@ -650,6 +670,12 @@ mod tests {
         ) {
             // Set up a mock of the expected element_generator usage context
             let mut rng = rand::thread_rng();
+            if num_subnormals > target_len {
+                return assert_panics(AssertUnwindSafe(|| {
+                    #[allow(unused_must_use)]
+                    super::element_generator::<_, GeneratorStreamMock<f32>>(num_subnormals, target_len, &mut rng);
+                }));
+            }
             let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
             let mut streams =
                 std::iter::repeat_with(GeneratorStreamMock::<f32>::new).take(num_streams).collect::<Box<[_]>>();
@@ -699,6 +725,12 @@ mod tests {
             debug_assert_eq!(target_len % 2, 0);
             let half_len = target_len / 2;
             let mut rng = rand::thread_rng();
+            if num_subnormals > target_len {
+                return assert_panics(AssertUnwindSafe(|| {
+                    #[allow(unused_must_use)]
+                    super::element_generator::<_, GeneratorStreamMock<f32>>(num_subnormals, target_len, &mut rng);
+                }));
+            }
             let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
             let mut streams =
                 std::iter::repeat_with(GeneratorStreamMock::<f32>::new).take(num_streams).collect::<Box<[_]>>();
@@ -783,7 +815,7 @@ mod tests {
         target_len(ILP, pairs).prop_flat_map(|target_len| {
             (
                 prop::collection::vec(any::<f32>(), target_len),
-                0..=target_len,
+                num_subnormals(target_len),
             )
         })
     }
@@ -795,7 +827,10 @@ mod tests {
         if pairs {
             assert_eq!(INPUT_REGISTERS % 2, 0);
         }
-        ([any::<f32>(); INPUT_REGISTERS], 0..=INPUT_REGISTERS)
+        (
+            [any::<f32>(); INPUT_REGISTERS],
+            num_subnormals(INPUT_REGISTERS),
+        )
     }
 
     /// Test `generate_input_streams` in a certain configuration
@@ -808,12 +843,18 @@ mod tests {
         let stream_actions = generator.stream_actions_rc();
 
         // Run generate_input_streams
-        generate_input_streams::<_, _, ILP>(
-            &mut target,
-            &mut rand::thread_rng(),
-            num_subnormals,
-            generator,
-        );
+        let generate = |target: &mut Storage| {
+            generate_input_streams::<_, _, ILP>(
+                target,
+                &mut rand::thread_rng(),
+                num_subnormals,
+                generator,
+            )
+        };
+        if num_subnormals > target.as_ref().len() {
+            return assert_panics(AssertUnwindSafe(|| generate(&mut target)));
+        }
+        generate(&mut target);
 
         // Validate the results, using polymorphized code to reduce code bloat
         let expected_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
@@ -980,13 +1021,19 @@ mod tests {
         let generator = InputGeneratorMock::new();
         let stream_actions = generator.stream_actions_rc();
 
-        // Run generate_input_streams
-        generate_input_pairs::<_, _, ILP>(
-            &mut target,
-            &mut rand::thread_rng(),
-            num_subnormals,
-            generator,
-        );
+        // Run generate_input_pairs
+        let generate = |target: &mut Storage| {
+            generate_input_pairs::<_, _, ILP>(
+                target,
+                &mut rand::thread_rng(),
+                num_subnormals,
+                generator,
+            )
+        };
+        if num_subnormals > target.as_ref().len() {
+            return assert_panics(AssertUnwindSafe(|| generate(&mut target)));
+        }
+        generate(&mut target);
 
         // Validate the results, using polymorphized code to reduce code bloat
         let expected_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
