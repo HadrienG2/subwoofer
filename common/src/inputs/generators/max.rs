@@ -36,3 +36,43 @@ pub fn generate_max_inputs<T: FloatLike, R: Rng>(
     // Randomize the order of normal and subnormal inputs
     target.shuffle(rng)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{inputs::generators::tests::num_subnormals, tests::assert_panics};
+    use proptest::prelude::*;
+    use std::panic::AssertUnwindSafe;
+
+    /// Test [`generate_max_inputs()`]
+    fn target_and_num_subnormals() -> impl Strategy<Value = (Vec<f32>, usize)> {
+        any::<Vec<f32>>().prop_flat_map(|target| {
+            let target_len = target.len();
+            (Just(target), num_subnormals(target_len))
+        })
+    }
+    //
+    proptest! {
+        #[test]
+        fn generate_max_inputs((mut target, num_subnormals) in target_and_num_subnormals()) {
+            // Handle invalid subnormals count and generate benchmark inputs
+            let generate = |target: &mut [_]| super::generate_max_inputs(target, &mut rand::thread_rng(), num_subnormals);
+            if num_subnormals > target.len() {
+                return assert_panics(AssertUnwindSafe(|| {
+                    generate(&mut target);
+                }));
+            }
+            generate(&mut target);
+
+            // Check that the generated inputs meet our expectations
+            let mut actual_subnormals = 0;
+            for elem in target {
+                if elem.is_subnormal() {
+                    actual_subnormals += 1;
+                } else {
+                    prop_assert!(elem.is_normal());
+                }
+            }
+            prop_assert_eq!(actual_subnormals, num_subnormals);
+        }
+    }
+}

@@ -3,8 +3,6 @@
 pub mod generators;
 
 use crate::floats::FloatLike;
-#[cfg(test)]
-use proptest_derive::Arbitrary;
 
 /// Owned or borrowed ordered set of benchmark inputs
 ///
@@ -47,7 +45,7 @@ pub trait Inputs: AsRef<[Self::Element]> {
 pub trait InputsMut: Inputs + AsMut<[Self::Element]> {}
 
 /// Kind of [`InputStorage`] that we are dealing with
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputKind {
     /// In-register dataset

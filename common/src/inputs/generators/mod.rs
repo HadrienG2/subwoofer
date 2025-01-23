@@ -355,7 +355,7 @@ fn subnormal_picker<R: Rng>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::tests::assert_panics;
     use proptest::{prelude::*, sample::SizeRange};
@@ -411,7 +411,10 @@ mod tests {
     }
 
     /// Expected indices of the elements of a stream in the matching subslice
-    fn expected_indices(stream_idx: usize, num_streams: usize) -> impl Iterator<Item = usize> {
+    fn expected_stream_indices(
+        stream_idx: usize,
+        num_streams: usize,
+    ) -> impl Iterator<Item = usize> {
         (0..).skip(stream_idx).step_by(num_streams)
     }
 
@@ -452,11 +455,13 @@ mod tests {
     }
 
     /// Dataset that can be evenly cut into N streams of scalars or pairs
-    fn num_streams_and_target(pairs: bool) -> impl Strategy<Value = (usize, Vec<u8>)> {
+    pub fn num_streams_and_target<T: Arbitrary>(
+        pairs: bool,
+    ) -> impl Strategy<Value = (usize, Vec<T>)> {
         num_streams_and_target_len(pairs).prop_flat_map(|(num_streams, target_len)| {
             (
                 Just(num_streams),
-                prop::collection::vec(any::<u8>(), target_len),
+                prop::collection::vec(any::<T>(), target_len),
             )
         })
     }
@@ -464,7 +469,7 @@ mod tests {
     proptest! {
         /// Test scalar iteration over data streams
         #[test]
-        fn stream_scalar_iter((num_streams, mut target) in num_streams_and_target(false)) {
+        fn stream_scalar_iter((num_streams, mut target) in num_streams_and_target::<u8>(false)) {
             let initial = target.clone();
             let target = &mut target[..];
             let left_start = target.as_ptr();
@@ -477,7 +482,7 @@ mod tests {
                     num_streams,
                 })
                 .into_scalar_iter()
-                .zip(expected_indices(stream_idx, num_streams))
+                .zip(expected_stream_indices(stream_idx, num_streams))
                 {
                     prop_assert_eq!(index_of(elem, left_start), expected_idx);
                     num_elems += 1;
@@ -490,7 +495,7 @@ mod tests {
 
         /// Test pairwise iteration over data streams
         #[test]
-        fn stream_pair_iter((num_streams, mut target) in num_streams_and_target(true)) {
+        fn stream_pair_iter((num_streams, mut target) in num_streams_and_target::<u8>(true)) {
             let initial = target.clone();
             let target = &mut target[..];
             debug_assert_eq!(target.len() % 2, 0);
@@ -506,7 +511,7 @@ mod tests {
                     num_streams,
                 })
                 .into_pair_iter()
-                .zip(expected_indices(stream_idx, num_streams))
+                .zip(expected_stream_indices(stream_idx, num_streams))
                 {
                     prop_assert_eq!(index_of(left, left_start), expected_idx);
                     prop_assert_eq!(index_of(right, right_start), expected_idx);
@@ -637,7 +642,7 @@ mod tests {
     }
 
     /// Mostly-valid subnormal amounts, for a given total dataset length
-    fn num_subnormals(target_len: usize) -> impl Strategy<Value = usize> {
+    pub fn num_subnormals(target_len: usize) -> impl Strategy<Value = usize> {
         if target_len == 0 {
             Just(0).boxed()
         } else {
