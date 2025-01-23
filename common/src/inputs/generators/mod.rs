@@ -24,6 +24,7 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
     generator: impl InputGenerator<Storage::Element, R>,
 ) {
     // Determine how many interleaved input data streams should be generated...
+    assert!(ILP > 0);
     let num_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
     inner(target.as_mut(), rng, num_subnormals, generator, num_streams);
     //
@@ -35,6 +36,9 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
         generator: G,
         num_streams: usize,
     ) {
+        // Validate configuration
+        assert!(num_subnormals <= target.len());
+
         // Set up the interleaved data streams
         let mut streams: [_; MIN_FLOAT_REGISTERS] = std::array::from_fn(|_| generator.new_stream());
         assert!(num_streams <= streams.len());
@@ -408,15 +412,40 @@ mod tests {
         (0..).skip(stream_idx).step_by(num_streams)
     }
 
-    /// Dimensions of a dataset that can be evenly cut into N streams of scalars or pairs
-    fn num_streams_and_target_len(pairs: bool) -> impl Strategy<Value = (usize, usize)> {
-        let default_sizes = SizeRange::default();
+    /// Length of a dataset that can be reinterpreted as N streams of
+    /// scalars or pairs, where the streams may or may not be of equal length
+    fn target_len(num_streams: usize, pairs: bool) -> impl Strategy<Value = usize> {
+        // Decide how many streams will have more elements than the others
+        debug_assert!(num_streams > 0);
+        let num_longer_streams = if num_streams == 1 {
+            Just(0).boxed()
+        } else {
+            prop_oneof![
+                2 => Just(0),
+                3 => 1..num_streams,
+            ]
+            .boxed()
+        };
+
+        // Decide the length of the shortest streams of scalars/pairs
         let scalars_per_stream_elem = 1 + pairs as usize;
-        (1usize..=MIN_FLOAT_REGISTERS).prop_flat_map(move |num_streams| {
-            let num_substreams = num_streams * scalars_per_stream_elem;
-            ((default_sizes.start() / num_substreams)..(default_sizes.end_excl() / num_substreams))
-                .prop_map(move |stream_len| (num_streams, num_substreams * stream_len))
-        })
+        let num_substreams = num_streams * scalars_per_stream_elem;
+        let default_sizes = SizeRange::default();
+        let min_substream_len =
+            (default_sizes.start() / num_substreams)..(default_sizes.end_excl() / num_substreams);
+
+        // Deduce the overall dataset length
+        (min_substream_len, num_longer_streams).prop_map(
+            move |(min_substream_len, num_longer_streams)| {
+                min_substream_len * num_substreams + num_longer_streams * scalars_per_stream_elem
+            },
+        )
+    }
+
+    /// Like [`target_len()`] but also generates the number of streams
+    fn num_streams_and_target_len(pairs: bool) -> impl Strategy<Value = (usize, usize)> {
+        (1usize..=MIN_FLOAT_REGISTERS)
+            .prop_flat_map(move |num_streams| (Just(num_streams), target_len(num_streams, pairs)))
     }
 
     /// Dataset that can be evenly cut into N streams of scalars or pairs
@@ -436,7 +465,7 @@ mod tests {
             let initial = target.clone();
             let target = &mut target[..];
             let left_start = target.as_ptr();
-            debug_assert_eq!(target.len() % num_streams, 0);
+            let min_elems = target.len() / num_streams;
             for stream_idx in 0..num_streams {
                 let mut num_elems = 0;
                 for (elem, expected_idx) in (DataStream {
@@ -450,22 +479,22 @@ mod tests {
                     prop_assert_eq!(index_of(elem, left_start), expected_idx);
                     num_elems += 1;
                 }
-                prop_assert_eq!(num_elems, target.len() / num_streams);
+                let has_extra_elem = stream_idx < (target.len() % num_streams);
+                prop_assert_eq!(num_elems, min_elems + has_extra_elem as usize);
             }
             prop_assert_eq!(target, initial);
         }
 
         /// Test pairwise iteration over data streams
         #[test]
-        fn stream_pair_iter((num_streams, mut target) in num_streams_and_target(false)) {
+        fn stream_pair_iter((num_streams, mut target) in num_streams_and_target(true)) {
             let initial = target.clone();
             let target = &mut target[..];
+            debug_assert_eq!(target.len() % 2, 0);
             let half_len = target.len() / 2;
-            if target.len() % 2 != 0 || half_len % num_streams != 0 {
-                return Ok(());
-            }
             let left_start = target.as_ptr();
             let right_start = left_start.wrapping_add(half_len);
+            let min_elems = half_len / num_streams;
             for stream_idx in 0..num_streams {
                 let mut num_elems = 0;
                 for ([left, right], expected_idx) in (DataStream {
@@ -480,7 +509,8 @@ mod tests {
                     prop_assert_eq!(index_of(right, right_start), expected_idx);
                     num_elems += 1;
                 }
-                prop_assert_eq!(num_elems, half_len / num_streams);
+                let has_extra_elem = stream_idx < (half_len % num_streams);
+                prop_assert_eq!(num_elems, min_elems + has_extra_elem as usize);
             }
             prop_assert_eq!(target, initial);
         }
@@ -525,11 +555,12 @@ mod tests {
     }
 
     /// Mock of [`GeneratorStream`] that records the sequence of method calls
-    struct GeneratorStreamMock<T: FloatLike>(GeneratorStreamActions<T>);
+    struct GeneratorStreamMock<T: FloatLike>(GeneratorStreamActionList<T>);
     //
-    type GeneratorStreamActions<T> = Rc<RefCell<Vec<GeneratorStreamAction<T>>>>;
+    /// Recorded actions from a [`GeneratorStreamMock`]
+    type GeneratorStreamActionList<T> = Rc<RefCell<Vec<GeneratorStreamAction<T>>>>;
     //
-    /// Method calls recorded by a [`GeneratorStreamMock`]
+    /// Individual record from a [`GeneratorStreamActionList`]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum GeneratorStreamAction<T> {
         RecordSubnormal,
@@ -557,11 +588,11 @@ mod tests {
             self.0.borrow()
         }
 
-        /// Get access to the internal actions list that outlives self
+        /// Get access to the internal actions list that outlives `self`
         ///
         /// Useful for test scenarios where the stream is consumed by
         /// `finalize()` before we got a chance to investigate it.
-        fn actions_rc(&self) -> GeneratorStreamActions<T> {
+        fn actions_rc(&self) -> GeneratorStreamActionList<T> {
             self.0.clone()
         }
 
@@ -618,7 +649,6 @@ mod tests {
             (num_streams, num_subnormals, target_len) in num_streams_and_subnormal_config(false),
         ) {
             // Set up a mock of the expected element_generator usage context
-            debug_assert_eq!(target_len % num_streams, 0);
             let mut rng = rand::thread_rng();
             let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
             let mut streams =
@@ -626,13 +656,18 @@ mod tests {
 
             // Simulate producing N interleaved streams of data
             let mut recorded_subnormals = 0;
-            for first_idx in (0..target_len).step_by(num_streams) {
+            'outer: for first_idx in (0..target_len).step_by(num_streams) {
                 for (offset, stream) in streams.iter_mut().enumerate() {
+                    // Decide if this element should be generated
+                    let elem_idx = first_idx + offset;
+                    if elem_idx >= target_len {
+                        break 'outer;
+                    }
+
                     // Back up previous stream action list
                     let prev_actions = stream.actions_clone();
 
                     // Make sure the generator does only one thing to the stream
-                    let elem_idx = first_idx + offset;
                     generator(stream, elem_idx);
                     let actions = stream.actions();
                     prop_assert_eq!(actions.len(), prev_actions.len() + 1);
@@ -663,7 +698,6 @@ mod tests {
             // Set up a mock of the expected element_generator usage context
             debug_assert_eq!(target_len % 2, 0);
             let half_len = target_len / 2;
-            debug_assert_eq!(half_len % num_streams, 0);
             let mut rng = rand::thread_rng();
             let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
             let mut streams =
@@ -671,10 +705,20 @@ mod tests {
 
             // Simulate producing N interleaved streams of data
             let mut recorded_subnormals = 0;
-            for first_left_idx in (0..half_len).step_by(num_streams) {
+            'outer: for first_left_idx in (0..half_len).step_by(num_streams) {
                 for (offset, stream) in streams.iter_mut().enumerate() {
+                    // Compute the index of each pair element
                     let left_idx = first_left_idx + offset;
-                    for elem_idx in [left_idx, left_idx + half_len] {
+                    let right_idx = left_idx + half_len;
+
+                    // Decide if this pair should be generated
+                    if right_idx >= target_len {
+                        break 'outer;
+                    }
+                    debug_assert!(left_idx < half_len);
+
+                    // Generate each element of the pair
+                    for elem_idx in [left_idx, right_idx] {
                         // Back up previous stream action list
                         let prev_actions = stream.actions_clone();
 
@@ -703,5 +747,406 @@ mod tests {
         }
     }
 
-    // TODO: Tests
+    /// Mock of [`InputGenerator`] that records all actions from all streams
+    struct InputGeneratorMock<T: FloatLike>(InputGeneratorStreams<T>);
+    //
+    /// Recorded per-stream actions from an [`InputGeneratorMock`]
+    type InputGeneratorStreams<T> = Rc<RefCell<Vec<GeneratorStreamActionList<T>>>>;
+    //
+    impl<T: FloatLike> InputGeneratorMock<T> {
+        /// Set up a new input generator mock
+        fn new() -> Self {
+            Self(Rc::new(RefCell::new(Vec::new())))
+        }
+
+        /// Get access to the per-stream actions list that outlives `self`
+        ///
+        /// Useful for test scenarios where the input generator is consumed
+        /// before we got a chance to investigate it.
+        fn stream_actions_rc(&self) -> InputGeneratorStreams<T> {
+            self.0.clone()
+        }
+    }
+    //
+    impl<T: FloatLike, R: Rng> InputGenerator<T, R> for InputGeneratorMock<T> {
+        type Stream<'a> = GeneratorStreamMock<T>;
+
+        fn new_stream(&self) -> Self::Stream<'_> {
+            let stream = GeneratorStreamMock::new();
+            self.0.borrow_mut().push(stream.actions_rc());
+            stream
+        }
+    }
+
+    /// Inputs for a `generate_input` test that operates over borrowed memory
+    fn memory_input<const ILP: usize>(pairs: bool) -> impl Strategy<Value = (Vec<f32>, usize)> {
+        target_len(ILP, pairs).prop_flat_map(|target_len| {
+            (
+                prop::collection::vec(any::<f32>(), target_len),
+                0..=target_len,
+            )
+        })
+    }
+
+    /// Inputs for a `generate_input` test that operates over owned registers
+    fn registers_input<const INPUT_REGISTERS: usize>(
+        pairs: bool,
+    ) -> impl Strategy<Value = ([f32; INPUT_REGISTERS], usize)> {
+        if pairs {
+            assert_eq!(INPUT_REGISTERS % 2, 0);
+        }
+        ([any::<f32>(); INPUT_REGISTERS], 0..=INPUT_REGISTERS)
+    }
+
+    /// Test `generate_input_streams` in a certain configuration
+    fn test_generate_input_streams<Storage: InputsMut<Element = f32>, const ILP: usize>(
+        mut target: Storage,
+        num_subnormals: usize,
+    ) -> Result<(), TestCaseError> {
+        // Set up a mock input generator that tracks per-stream actions
+        let generator = InputGeneratorMock::new();
+        let stream_actions = generator.stream_actions_rc();
+
+        // Run generate_input_streams
+        generate_input_streams::<_, _, ILP>(
+            &mut target,
+            &mut rand::thread_rng(),
+            num_subnormals,
+            generator,
+        );
+
+        // Validate the results, using polymorphized code to reduce code bloat
+        let expected_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
+        fn validate(
+            target: &[f32],
+            num_subnormals: usize,
+            stream_actions: InputGeneratorStreams<f32>,
+            expected_streams: usize,
+        ) -> Result<(), TestCaseError> {
+            // Check that generate_input_streams created at least the expected
+            // number of data streams
+            let streams = stream_actions.borrow();
+            prop_assert!(streams.len() >= expected_streams);
+
+            // Check that the stream generators performed the expected actions
+            let min_stream_len = target.len() / expected_streams;
+            let mut actual_subnormals = 0;
+            for (stream_idx, actions) in streams.iter().map(|stream| stream.borrow()).enumerate() {
+                // Any stream created after the expected ones should be a
+                // placeholder memory value that is never used for anything
+                if stream_idx >= expected_streams {
+                    prop_assert!(actions.is_empty());
+                    continue;
+                }
+
+                // Other streams should have one action per generated data
+                // element, plus a trailing finalization action at the end.
+                let has_extra_elem = stream_idx < (target.len() % expected_streams);
+                let expected_elems = min_stream_len + has_extra_elem as usize;
+                prop_assert_eq!(actions.len(), expected_elems + 1);
+                let (last_action, other_actions) = actions.split_last().unwrap();
+                prop_assert_eq!(
+                    *last_action,
+                    GeneratorStreamAction::Finalize {
+                        target: NonNull::from(target),
+                        stream_idx,
+                        num_streams: expected_streams
+                    }
+                );
+
+                // Check that the data element generation actions look correct
+                let mut expected_idx = stream_idx;
+                for action in other_actions {
+                    debug_assert!(expected_idx < target.len());
+                    match *action {
+                        GeneratorStreamAction::RecordSubnormal => {
+                            actual_subnormals += 1;
+                            prop_assert!(target[expected_idx].is_subnormal());
+                        }
+                        GeneratorStreamAction::GenerateNormal { narrow, global_idx } => {
+                            prop_assert!(narrow >= 0.5);
+                            prop_assert!(narrow < 2.0);
+                            prop_assert_eq!(global_idx, expected_idx);
+                            prop_assert_eq!(target[expected_idx], narrow);
+                        }
+                        GeneratorStreamAction::Finalize { .. } => unreachable!(),
+                    }
+                    expected_idx += expected_streams;
+                }
+            }
+            prop_assert_eq!(actual_subnormals, num_subnormals);
+            Ok(())
+        }
+        validate(
+            target.as_ref(),
+            num_subnormals,
+            stream_actions,
+            expected_streams,
+        )
+    }
+    //
+    proptest! {
+        #[test]
+        fn generate_input_streams_memory_ilp1(
+            (mut target, num_subnormals) in memory_input::<1>(false)
+        ) {
+            test_generate_input_streams::<_, 1>(target.as_mut_slice(), num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_memory_ilp2(
+            (mut target, num_subnormals) in memory_input::<2>(false)
+        ) {
+            test_generate_input_streams::<_, 2>(target.as_mut_slice(), num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_memory_ilp3(
+            (mut target, num_subnormals) in memory_input::<3>(false)
+        ) {
+            test_generate_input_streams::<_, 3>(target.as_mut_slice(), num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_1reg_ilp1(
+            (target, num_subnormals) in registers_input::<1>(false)
+        ) {
+            test_generate_input_streams::<_, 1>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_1reg_ilp2(
+            (target, num_subnormals) in registers_input::<1>(false)
+        ) {
+            test_generate_input_streams::<_, 2>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_1reg_ilp3(
+            (target, num_subnormals) in registers_input::<1>(false)
+        ) {
+            test_generate_input_streams::<_, 3>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_2regs_ilp1(
+            (target, num_subnormals) in registers_input::<2>(false)
+        ) {
+            test_generate_input_streams::<_, 1>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_2regs_ilp2(
+            (target, num_subnormals) in registers_input::<2>(false)
+        ) {
+            test_generate_input_streams::<_, 2>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_2regs_ilp3(
+            (target, num_subnormals) in registers_input::<2>(false)
+        ) {
+            test_generate_input_streams::<_, 3>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_3regs_ilp1(
+            (target, num_subnormals) in registers_input::<3>(false)
+        ) {
+            test_generate_input_streams::<_, 1>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_3regs_ilp2(
+            (target, num_subnormals) in registers_input::<3>(false)
+        ) {
+            test_generate_input_streams::<_, 2>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_streams_3regs_ilp3(
+            (target, num_subnormals) in registers_input::<3>(false)
+        ) {
+            test_generate_input_streams::<_, 3>(target, num_subnormals)?;
+        }
+    }
+
+    /// Test `generate_input_pairs` in a certain configuration
+    fn test_generate_input_pairs<Storage: InputsMut<Element = f32>, const ILP: usize>(
+        mut target: Storage,
+        num_subnormals: usize,
+    ) -> Result<(), TestCaseError> {
+        // Set up a mock input generator that tracks per-stream actions
+        let generator = InputGeneratorMock::new();
+        let stream_actions = generator.stream_actions_rc();
+
+        // Run generate_input_streams
+        generate_input_pairs::<_, _, ILP>(
+            &mut target,
+            &mut rand::thread_rng(),
+            num_subnormals,
+            generator,
+        );
+
+        // Validate the results, using polymorphized code to reduce code bloat
+        let expected_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
+        fn validate(
+            target: &[f32],
+            num_subnormals: usize,
+            stream_actions: InputGeneratorStreams<f32>,
+            expected_streams: usize,
+        ) -> Result<(), TestCaseError> {
+            // Check that generate_input_streams created at least the expected
+            // number of data streams
+            let streams = stream_actions.borrow();
+            prop_assert!(streams.len() >= expected_streams);
+
+            // Check that the stream generators performed the expected actions
+            debug_assert_eq!(target.len() % 2, 0);
+            let half_len = target.len() / 2;
+            let min_pairs_per_stream = half_len / expected_streams;
+            let mut actual_subnormals = 0;
+            for (stream_idx, actions) in streams.iter().map(|stream| stream.borrow()).enumerate() {
+                // Any stream created after the expected ones should be a
+                // placeholder memory value that is never used for anything
+                if stream_idx >= expected_streams {
+                    prop_assert!(actions.is_empty());
+                    continue;
+                }
+
+                // Other streams should have one action per generated data
+                // element, plus a trailing finalization action at the end.
+                let has_extra_pair = stream_idx < (half_len % expected_streams);
+                let expected_pairs = min_pairs_per_stream + has_extra_pair as usize;
+                prop_assert_eq!(actions.len(), 2 * expected_pairs + 1);
+                let (last_action, other_actions) = actions.split_last().unwrap();
+                prop_assert_eq!(
+                    *last_action,
+                    GeneratorStreamAction::Finalize {
+                        target: NonNull::from(target),
+                        stream_idx,
+                        num_streams: expected_streams
+                    }
+                );
+
+                // Check that the data element generation actions look correct
+                let mut expected_left_idx = stream_idx;
+                debug_assert_eq!(other_actions.len() % 2, 0);
+                for action_pair in other_actions.chunks_exact(2) {
+                    let expected_indices = [expected_left_idx, expected_left_idx + half_len];
+                    for (action, expected_idx) in action_pair.iter().zip(expected_indices) {
+                        debug_assert!(expected_idx < target.len());
+                        match *action {
+                            GeneratorStreamAction::RecordSubnormal => {
+                                actual_subnormals += 1;
+                                prop_assert!(target[expected_idx].is_subnormal());
+                            }
+                            GeneratorStreamAction::GenerateNormal { narrow, global_idx } => {
+                                prop_assert!(narrow >= 0.5);
+                                prop_assert!(narrow < 2.0);
+                                prop_assert_eq!(global_idx, expected_idx);
+                                prop_assert_eq!(target[expected_idx], narrow);
+                            }
+                            GeneratorStreamAction::Finalize { .. } => unreachable!(),
+                        }
+                    }
+                    expected_left_idx += expected_streams;
+                }
+            }
+            prop_assert_eq!(actual_subnormals, num_subnormals);
+            Ok(())
+        }
+        validate(
+            target.as_ref(),
+            num_subnormals,
+            stream_actions,
+            expected_streams,
+        )
+    }
+    //
+    proptest! {
+        #[test]
+        fn generate_input_pairs_memory_ilp1(
+            (mut target, num_subnormals) in memory_input::<1>(true)
+        ) {
+            test_generate_input_pairs::<_, 1>(target.as_mut_slice(), num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_memory_ilp2(
+            (mut target, num_subnormals) in memory_input::<2>(true)
+        ) {
+            test_generate_input_pairs::<_, 2>(target.as_mut_slice(), num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_memory_ilp3(
+            (mut target, num_subnormals) in memory_input::<3>(true)
+        ) {
+            test_generate_input_pairs::<_, 3>(target.as_mut_slice(), num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_2regs_ilp1(
+            (target, num_subnormals) in registers_input::<2>(true)
+        ) {
+            test_generate_input_pairs::<_, 1>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_2regs_ilp2(
+            (target, num_subnormals) in registers_input::<2>(true)
+        ) {
+            test_generate_input_pairs::<_, 2>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_2regs_ilp3(
+            (target, num_subnormals) in registers_input::<2>(true)
+        ) {
+            test_generate_input_pairs::<_, 3>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_4regs_ilp1(
+            (target, num_subnormals) in registers_input::<4>(true)
+        ) {
+            test_generate_input_pairs::<_, 1>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_4regs_ilp2(
+            (target, num_subnormals) in registers_input::<4>(true)
+        ) {
+            test_generate_input_pairs::<_, 2>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_4regs_ilp3(
+            (target, num_subnormals) in registers_input::<4>(true)
+        ) {
+            test_generate_input_pairs::<_, 3>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_6regs_ilp1(
+            (target, num_subnormals) in registers_input::<6>(true)
+        ) {
+            test_generate_input_pairs::<_, 1>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_6regs_ilp2(
+            (target, num_subnormals) in registers_input::<6>(true)
+        ) {
+            test_generate_input_pairs::<_, 2>(target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_input_pairs_6regs_ilp3(
+            (target, num_subnormals) in registers_input::<6>(true)
+        ) {
+            test_generate_input_pairs::<_, 3>(target, num_subnormals)?;
+        }
+    }
 }
