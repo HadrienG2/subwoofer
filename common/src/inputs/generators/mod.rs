@@ -352,14 +352,27 @@ mod tests {
     use super::*;
     use crate::tests::assert_panics;
     use proptest::{prelude::*, sample::SizeRange};
-    use std::{ops::Range, panic::AssertUnwindSafe};
+    use std::{
+        cell::RefCell,
+        ops::{Deref, Range},
+        panic::AssertUnwindSafe,
+        ptr::NonNull,
+        rc::Rc,
+    };
+
+    /// Reasonable arguments to `subnormal_picker` and `generate_elements`
+    fn subnormal_config() -> impl Strategy<Value = (usize, usize)> {
+        (
+            0..SizeRange::default().end_excl(),
+            Range::from(SizeRange::default()),
+        )
+    }
 
     proptest! {
         /// Test the subnormal number picker
         #[test]
         fn subnormal_picker(
-            target_len in Range::from(SizeRange::default()),
-            num_subnormals in 0..SizeRange::default().end_excl(),
+            (num_subnormals, target_len) in subnormal_config(),
         ) {
             // Creation should panic if num_subnormals > target_len
             let make_picker = || super::subnormal_picker(num_subnormals, target_len);
@@ -395,19 +408,24 @@ mod tests {
         (0..).skip(stream_idx).step_by(num_streams)
     }
 
-    /// Dataset that can be evenly cut into N streams of scalars or pairs
-    fn num_streams_and_target(pairs: bool) -> impl Strategy<Value = (usize, Vec<u8>)> {
+    /// Dimensions of a dataset that can be evenly cut into N streams of scalars or pairs
+    fn num_streams_and_target_len(pairs: bool) -> impl Strategy<Value = (usize, usize)> {
         let default_sizes = SizeRange::default();
         let scalars_per_stream_elem = 1 + pairs as usize;
         (1usize..=MIN_FLOAT_REGISTERS).prop_flat_map(move |num_streams| {
             let num_substreams = num_streams * scalars_per_stream_elem;
             ((default_sizes.start() / num_substreams)..(default_sizes.end_excl() / num_substreams))
-                .prop_flat_map(move |stream_len| {
-                    (
-                        Just(num_streams),
-                        prop::collection::vec(any::<u8>(), num_substreams * stream_len),
-                    )
-                })
+                .prop_map(move |stream_len| (num_streams, num_substreams * stream_len))
+        })
+    }
+
+    /// Dataset that can be evenly cut into N streams of scalars or pairs
+    fn num_streams_and_target(pairs: bool) -> impl Strategy<Value = (usize, Vec<u8>)> {
+        num_streams_and_target_len(pairs).prop_flat_map(|(num_streams, target_len)| {
+            (
+                Just(num_streams),
+                prop::collection::vec(any::<u8>(), target_len),
+            )
         })
     }
 
@@ -503,6 +521,185 @@ mod tests {
             }
             prop_assert_eq!(output_idx(), global_idx);
             prop_assert_eq!(target, initial);
+        }
+    }
+
+    /// Mock of [`GeneratorStream`] that records the sequence of method calls
+    struct GeneratorStreamMock<T: FloatLike>(GeneratorStreamActions<T>);
+    //
+    type GeneratorStreamActions<T> = Rc<RefCell<Vec<GeneratorStreamAction<T>>>>;
+    //
+    /// Method calls recorded by a [`GeneratorStreamMock`]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum GeneratorStreamAction<T> {
+        RecordSubnormal,
+        GenerateNormal {
+            global_idx: usize,
+            narrow: T,
+        },
+        Finalize {
+            target: NonNull<[T]>,
+            stream_idx: usize,
+            num_streams: usize,
+        },
+    }
+    //
+    impl<T: FloatLike> GeneratorStreamMock<T> {
+        /// Set up the mock
+        fn new() -> Self {
+            Self(Rc::new(RefCell::new(Vec::new())))
+        }
+
+        /// Get temporary access to the stream's internal action list
+        fn actions(
+            &self,
+        ) -> impl Deref<Target = impl Deref<Target = [GeneratorStreamAction<T>]>> + '_ {
+            self.0.borrow()
+        }
+
+        /// Get access to the internal actions list that outlives self
+        ///
+        /// Useful for test scenarios where the stream is consumed by
+        /// `finalize()` before we got a chance to investigate it.
+        fn actions_rc(&self) -> GeneratorStreamActions<T> {
+            self.0.clone()
+        }
+
+        /// Get a copy of the stream's internal action list
+        fn actions_clone(&self) -> Box<[GeneratorStreamAction<T>]> {
+            self.0.borrow().iter().copied().collect()
+        }
+    }
+    //
+    impl<R: Rng, T: FloatLike> GeneratorStream<R> for GeneratorStreamMock<T> {
+        type Float = T;
+
+        fn record_subnormal(&mut self) {
+            self.0
+                .borrow_mut()
+                .push(GeneratorStreamAction::RecordSubnormal);
+        }
+
+        fn generate_normal(
+            &mut self,
+            global_idx: usize,
+            rng: &mut R,
+            mut narrow: impl FnMut(&mut R) -> Self::Float,
+        ) -> Self::Float {
+            let narrow = narrow(rng);
+            self.0
+                .borrow_mut()
+                .push(GeneratorStreamAction::GenerateNormal { global_idx, narrow });
+            narrow
+        }
+
+        fn finalize(self, stream: DataStream<'_, Self::Float>) {
+            self.0.borrow_mut().push(GeneratorStreamAction::Finalize {
+                target: NonNull::from(stream.target),
+                stream_idx: stream.stream_idx,
+                num_streams: stream.num_streams,
+            });
+        }
+    }
+
+    /// Inputs for an [`element_generator()`] test
+    fn num_streams_and_subnormal_config(
+        pairs: bool,
+    ) -> impl Strategy<Value = (usize, usize, usize)> {
+        num_streams_and_target_len(pairs).prop_flat_map(|(num_streams, target_len)| {
+            (Just(num_streams), 0..=target_len, Just(target_len))
+        })
+    }
+
+    proptest! {
+        /// Test generation of streams of scalar elements
+        #[test]
+        fn scalar_generator(
+            (num_streams, num_subnormals, target_len) in num_streams_and_subnormal_config(false),
+        ) {
+            // Set up a mock of the expected element_generator usage context
+            debug_assert_eq!(target_len % num_streams, 0);
+            let mut rng = rand::thread_rng();
+            let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
+            let mut streams =
+                std::iter::repeat_with(GeneratorStreamMock::<f32>::new).take(num_streams).collect::<Box<[_]>>();
+
+            // Simulate producing N interleaved streams of data
+            let mut recorded_subnormals = 0;
+            for first_idx in (0..target_len).step_by(num_streams) {
+                for (offset, stream) in streams.iter_mut().enumerate() {
+                    // Back up previous stream action list
+                    let prev_actions = stream.actions_clone();
+
+                    // Make sure the generator does only one thing to the stream
+                    let elem_idx = first_idx + offset;
+                    generator(stream, elem_idx);
+                    let actions = stream.actions();
+                    prop_assert_eq!(actions.len(), prev_actions.len() + 1);
+                    let new_action = actions.last().unwrap();
+
+                    // Make sure it does something expected
+                    match *new_action {
+                        GeneratorStreamAction::RecordSubnormal => recorded_subnormals += 1,
+                        GeneratorStreamAction::GenerateNormal { global_idx, narrow } => {
+                            prop_assert_eq!(global_idx, elem_idx);
+                            prop_assert!(narrow >= 0.5);
+                            prop_assert!(narrow < 2.0);
+                        }
+                        GeneratorStreamAction::Finalize { .. } => unreachable!(),
+                    }
+                }
+            }
+
+            // Check that the right number of subnormal numbers was produced
+            prop_assert_eq!(recorded_subnormals, num_subnormals);
+        }
+
+        /// Test generation of streams of pairs
+        #[test]
+        fn pair_generator(
+            (num_streams, num_subnormals, target_len) in num_streams_and_subnormal_config(true),
+        ) {
+            // Set up a mock of the expected element_generator usage context
+            debug_assert_eq!(target_len % 2, 0);
+            let half_len = target_len / 2;
+            debug_assert_eq!(half_len % num_streams, 0);
+            let mut rng = rand::thread_rng();
+            let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
+            let mut streams =
+                std::iter::repeat_with(GeneratorStreamMock::<f32>::new).take(num_streams).collect::<Box<[_]>>();
+
+            // Simulate producing N interleaved streams of data
+            let mut recorded_subnormals = 0;
+            for first_left_idx in (0..half_len).step_by(num_streams) {
+                for (offset, stream) in streams.iter_mut().enumerate() {
+                    let left_idx = first_left_idx + offset;
+                    for elem_idx in [left_idx, left_idx + half_len] {
+                        // Back up previous stream action list
+                        let prev_actions = stream.actions_clone();
+
+                        // Make sure the generator does only one thing to the stream
+                        generator(stream, elem_idx);
+                        let actions = stream.actions();
+                        prop_assert_eq!(actions.len(), prev_actions.len() + 1);
+                        let new_action = actions.last().unwrap();
+
+                        // Make sure it does something expected
+                        match *new_action {
+                            GeneratorStreamAction::RecordSubnormal => recorded_subnormals += 1,
+                            GeneratorStreamAction::GenerateNormal { global_idx, narrow } => {
+                                prop_assert_eq!(global_idx, elem_idx);
+                                prop_assert!(narrow >= 0.5);
+                                prop_assert!(narrow < 2.0);
+                            }
+                            GeneratorStreamAction::Finalize { .. } => unreachable!(),
+                        }
+                    }
+                }
+            }
+
+            // Check that the right number of subnormal numbers was produced
+            prop_assert_eq!(recorded_subnormals, num_subnormals);
         }
     }
 
