@@ -91,8 +91,13 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for AddStream<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{floats, inputs::generators::tests::num_streams_and_target};
+    use crate::{
+        floats,
+        inputs::generators::tests::{num_streams_and_target, num_subnormals, target_len},
+        tests::assert_panics,
+    };
     use proptest::prelude::*;
+    use std::panic::AssertUnwindSafe;
 
     /// Test [`AddStream`]
     fn stream_target_subnormals() -> impl Strategy<Value = (usize, usize, Vec<f32>, Vec<bool>)> {
@@ -166,5 +171,92 @@ mod tests {
         }
     }
 
-    // TODO: Test [`generate_add_inputs()`]
+    /// Test [`generate_add_inputs()`]
+    fn test_generate_add_inputs<const ILP: usize>(
+        target: &mut [f32],
+        num_subnormals: usize,
+    ) -> Result<(), TestCaseError> {
+        // Generate the inputs
+        let mut rng = rand::thread_rng();
+        let generate = |mut target: &mut [f32], rng: &mut _| {
+            generate_add_inputs::<_, ILP>(&mut target, rng, num_subnormals)
+        };
+        if num_subnormals > target.len() {
+            return assert_panics(AssertUnwindSafe(|| {
+                generate(target, &mut rng);
+            }));
+        }
+        generate(target, &mut rng);
+
+        // Set up narrow accumulators
+        let narrow = floats::narrow_sampler();
+        let accs_init: [f32; ILP] = std::array::from_fn(|_| narrow(&mut rng));
+
+        // Check the result and simulate its effect on narrow accumulators
+        let mut actual_subnormals = 0;
+        let mut accs = accs_init;
+        let mut to_negate: [Option<f32>; ILP] = [None; ILP];
+        let mut last_normal = [false; ILP];
+        for chunk in target.chunks(ILP) {
+            for ((&elem, acc), (to_negate, last_normal)) in (chunk.iter())
+                .zip(&mut accs)
+                .zip(to_negate.iter_mut().zip(&mut last_normal))
+            {
+                if elem.is_subnormal() {
+                    actual_subnormals += 1;
+                } else if elem == 0.0 {
+                    *last_normal = true;
+                } else {
+                    prop_assert!(elem.is_normal());
+                    prop_assert!(!*last_normal);
+                    if let Some(negated) = to_negate {
+                        prop_assert_eq!(elem, -*negated);
+                        *to_negate = None;
+                    } else {
+                        *to_negate = Some(elem)
+                    }
+                }
+                *acc += elem;
+            }
+        }
+
+        // Check that the input meets its goals of subnormal count and acc preservation
+        prop_assert_eq!(actual_subnormals, num_subnormals);
+        for (acc, init) in accs.iter().zip(accs_init) {
+            let difference = (acc - init).abs();
+            let threshold = 2e-6 * init;
+            prop_assert!(
+                difference < threshold,
+                "{acc} is too far from {init} (difference {difference} above threshold {threshold} after integrating inputs {target:?})"
+            )
+        }
+        Ok(())
+    }
+    //
+    /// Generate inputs for a [`generate_add_inputs()`] test
+    fn target_and_num_subnormals(ilp: usize) -> impl Strategy<Value = (Vec<f32>, usize)> {
+        target_len(ilp, false).prop_flat_map(|target_len| {
+            (
+                prop::collection::vec(any::<f32>(), target_len),
+                num_subnormals(target_len),
+            )
+        })
+    }
+    //
+    proptest! {
+        #[test]
+        fn generate_add_inputs_ilp1((mut target, num_subnormals) in target_and_num_subnormals(1)) {
+            test_generate_add_inputs::<1>(&mut target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_add_inputs_ilp2((mut target, num_subnormals) in target_and_num_subnormals(2)) {
+            test_generate_add_inputs::<2>(&mut target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_add_inputs_ilp3((mut target, num_subnormals) in target_and_num_subnormals(3)) {
+            test_generate_add_inputs::<3>(&mut target, num_subnormals)?;
+        }
+    }
 }

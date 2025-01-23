@@ -420,7 +420,7 @@ pub(crate) mod tests {
 
     /// Length of a dataset that can be reinterpreted as N streams of
     /// scalars or pairs, where the streams may or may not be of equal length
-    fn target_len(num_streams: usize, pairs: bool) -> impl Strategy<Value = usize> {
+    pub fn target_len(num_streams: usize, pairs: bool) -> impl Strategy<Value = usize> {
         // Decide how many streams will have more elements than the others
         debug_assert!(num_streams > 0);
         let num_longer_streams = if num_streams == 1 {
@@ -936,21 +936,21 @@ pub(crate) mod tests {
         fn generate_input_streams_memory_ilp1(
             (mut target, num_subnormals) in memory_input::<1>(false)
         ) {
-            test_generate_input_streams::<_, 1>(target.as_mut_slice(), num_subnormals)?;
+            test_generate_input_streams::<_, 1>(&mut target[..], num_subnormals)?;
         }
 
         #[test]
         fn generate_input_streams_memory_ilp2(
             (mut target, num_subnormals) in memory_input::<2>(false)
         ) {
-            test_generate_input_streams::<_, 2>(target.as_mut_slice(), num_subnormals)?;
+            test_generate_input_streams::<_, 2>(&mut target[..], num_subnormals)?;
         }
 
         #[test]
         fn generate_input_streams_memory_ilp3(
             (mut target, num_subnormals) in memory_input::<3>(false)
         ) {
-            test_generate_input_streams::<_, 3>(target.as_mut_slice(), num_subnormals)?;
+            test_generate_input_streams::<_, 3>(&mut target[..], num_subnormals)?;
         }
 
         #[test]
