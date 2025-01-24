@@ -39,7 +39,6 @@ impl<T: FloatLike, R: Rng> InputGenerator<T, R> for AddGenerator {
 }
 
 /// Per-stream state for this input generator
-#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Debug, PartialEq)]
 enum AddStream<T: FloatLike> {
     /// No constraint on the next normal value
@@ -93,26 +92,14 @@ mod tests {
     use super::*;
     use crate::{
         floats,
-        inputs::generators::tests::{num_streams_and_target, num_subnormals, target_len},
+        inputs::generators::tests::{num_subnormals, stream_target_subnormals, target_len},
         tests::assert_panics,
     };
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
 
-    /// Test [`AddStream`]
-    fn stream_target_subnormals() -> impl Strategy<Value = (usize, usize, Vec<f32>, Vec<bool>)> {
-        num_streams_and_target(false).prop_flat_map(|(num_streams, target)| {
-            let target_len = target.len();
-            (
-                0..num_streams,
-                Just(num_streams),
-                Just(target),
-                prop::collection::vec(any::<bool>(), target_len.div_ceil(num_streams)),
-            )
-        })
-    }
-    //
     proptest! {
+        /// Test [`AddStream`]
         #[test]
         fn add_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals()) {
             // Set up a mock environment
@@ -233,7 +220,7 @@ mod tests {
         Ok(())
     }
     //
-    /// Generate inputs for a [`generate_add_inputs()`] test
+    /// Inputs for a [`generate_add_inputs()`] test
     fn target_and_num_subnormals(ilp: usize) -> impl Strategy<Value = (Vec<f32>, usize)> {
         target_len(ilp, false).prop_flat_map(|target_len| {
             (

@@ -367,6 +367,20 @@ pub(crate) mod tests {
         rc::Rc,
     };
 
+    /// Inputs for [`GeneratorStream`] implementation tests
+    pub fn stream_target_subnormals() -> impl Strategy<Value = (usize, usize, Vec<f32>, Vec<bool>)>
+    {
+        num_streams_and_target(false).prop_flat_map(|(num_streams, target)| {
+            let target_len = target.len();
+            (
+                0..num_streams,
+                Just(num_streams),
+                Just(target),
+                prop::collection::vec(any::<bool>(), target_len.div_ceil(num_streams)),
+            )
+        })
+    }
+
     /// Reasonable arguments to `subnormal_picker` and `generate_elements`
     fn subnormal_config() -> impl Strategy<Value = (usize, usize)> {
         (
