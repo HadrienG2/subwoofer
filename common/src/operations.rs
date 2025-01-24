@@ -300,8 +300,8 @@ pub fn integrate_pairs<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
 /// accumulator-hiding barrier for autovectorization prevention in easy cases.
 /// It does not work for all computations, but when it works, it can lead to
 /// lower overhead than putting a barrier on all accumulators. If it doesn't
-/// work, just set MINIMAL to false and we'll hide all the accumulators if there is
-/// any risk of autovectorization.
+/// work, just set MINIMAL to false and we'll hide all the accumulators if there
+/// is any risk of autovectorization.
 ///
 /// To improve codegen further, you can also abandon the convenience of `-C
 /// target-cpu=native` and instead separately benchmark each type in a dedicated
