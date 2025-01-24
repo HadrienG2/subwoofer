@@ -392,4 +392,10 @@ mod tests {
             );
         }
     }
+
+    // High-level tests of `generate_muldiv_inputs` are not found here because
+    // they depend on the choice of `invert_normal` and `cancel_subnormal`
+    // callbacks, which is benchmark-specific. Instead, a generic test procedure
+    // is exposed above, and used by the tests of each individual benchmark that
+    // uses the "muldiv" input generation logic.
 }
