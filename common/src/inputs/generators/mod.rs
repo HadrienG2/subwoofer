@@ -401,16 +401,18 @@ pub mod test_utils {
 
     /// Mostly-valid subnormal amounts, for a given total dataset length
     pub(crate) fn num_subnormals(target_len: usize) -> impl Strategy<Value = usize> {
-        if target_len == 0 {
-            Just(0).boxed()
-        } else if target_len == 1 {
-            (0usize..=1).boxed()
+        if target_len < 2 {
+            prop_oneof![
+                2 => 0..=target_len,
+                3 => (target_len+1)..,
+            ]
+            .boxed()
         } else {
             prop_oneof![
                 1 => Just(0),
                 3 => 1..target_len,
                 1 => Just(target_len),
-                1 => target_len..,
+                1 => (target_len+1)..,
             ]
             .boxed()
         }
