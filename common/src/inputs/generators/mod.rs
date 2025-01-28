@@ -45,22 +45,24 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
         let streams = &mut streams[..num_streams];
 
         // Generate each element of each data stream
-        let mut generate_element = element_generator(num_subnormals, target.len(), rng);
-        let mut target_chunks = target.chunks_exact_mut(num_streams);
-        let mut global_idx = 0;
-        for chunk in target_chunks.by_ref() {
-            for (target, stream) in chunk.iter_mut().zip(streams.iter_mut()) {
+        {
+            let mut generate_element = element_generator(num_subnormals, target.len(), rng);
+            let mut target_chunks = target.chunks_exact_mut(num_streams);
+            let mut global_idx = 0;
+            for chunk in target_chunks.by_ref() {
+                for (target, stream) in chunk.iter_mut().zip(streams.iter_mut()) {
+                    *target = generate_element(stream, global_idx);
+                    global_idx += 1;
+                }
+            }
+            for (target, stream) in target_chunks
+                .into_remainder()
+                .iter_mut()
+                .zip(streams.iter_mut())
+            {
                 *target = generate_element(stream, global_idx);
                 global_idx += 1;
             }
-        }
-        for (target, stream) in target_chunks
-            .into_remainder()
-            .iter_mut()
-            .zip(streams.iter_mut())
-        {
-            *target = generate_element(stream, global_idx);
-            global_idx += 1;
         }
 
         // Tweak final data streams to enforce a perfect accumulator reset
@@ -69,11 +71,14 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
             .map(|stream| std::mem::replace(stream, generator.new_stream()))
             .enumerate()
         {
-            stream.finalize(DataStream {
-                target,
-                stream_idx,
-                num_streams,
-            })
+            stream.finalize(
+                DataStream {
+                    target,
+                    stream_idx,
+                    num_streams,
+                },
+                rng,
+            )
         }
     }
 }
@@ -122,50 +127,52 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
 
         // Generate each element of each data stream: regular bulk where each
         // data stream gets one new element...
-        let mut generate_element = element_generator(num_subnormals, target_len, rng);
-        let mut left_chunks = left_target.chunks_exact_mut(num_streams);
-        let mut right_chunks = right_target.chunks_exact_mut(num_streams);
-        let left_start = 0;
-        let right_start = half_len;
-        let mut offset = 0;
-        'chunks: loop {
-            match (left_chunks.next(), right_chunks.next()) {
-                (Some(left_chunk), Some(right_chunk)) => {
-                    for ((left_elem, right_elem), stream) in left_chunk
-                        .iter_mut()
-                        .zip(right_chunk)
-                        .zip(streams.iter_mut())
-                    {
-                        *left_elem = generate_element(stream, left_start + offset);
-                        *right_elem = generate_element(stream, right_start + offset);
-                        offset += 1;
-                    }
-                }
-                (None, None) => break 'chunks,
-                (Some(_), None) | (None, Some(_)) => {
-                    unreachable!("not possible with equal-length halves")
-                }
-            }
-        }
-
-        // ...then irregular remainder where not all streams get a new element
         {
-            let mut left_elems = left_chunks.into_remainder().iter_mut();
-            let mut right_elems = right_chunks.into_remainder().iter_mut();
-            let mut streams = streams.iter_mut();
-            'elems: loop {
-                match ((left_elems.next(), right_elems.next()), streams.next()) {
-                    ((Some(left_elem), Some(right_elem)), Some(stream)) => {
-                        *left_elem = generate_element(stream, left_start + offset);
-                        *right_elem = generate_element(stream, right_start + offset);
-                        offset += 1;
+            let mut generate_element = element_generator(num_subnormals, target_len, rng);
+            let mut left_chunks = left_target.chunks_exact_mut(num_streams);
+            let mut right_chunks = right_target.chunks_exact_mut(num_streams);
+            let left_start = 0;
+            let right_start = half_len;
+            let mut offset = 0;
+            'chunks: loop {
+                match (left_chunks.next(), right_chunks.next()) {
+                    (Some(left_chunk), Some(right_chunk)) => {
+                        for ((left_elem, right_elem), stream) in left_chunk
+                            .iter_mut()
+                            .zip(right_chunk)
+                            .zip(streams.iter_mut())
+                        {
+                            *left_elem = generate_element(stream, left_start + offset);
+                            *right_elem = generate_element(stream, right_start + offset);
+                            offset += 1;
+                        }
                     }
-                    ((None, None), Some(_)) => break 'elems,
-                    ((Some(_), None), _) | ((None, Some(_)), _) => {
+                    (None, None) => break 'chunks,
+                    (Some(_), None) | (None, Some(_)) => {
                         unreachable!("not possible with equal-length halves")
                     }
-                    (_, None) => {
-                        unreachable!("should have remainder.len() < num_streams")
+                }
+            }
+
+            // ...then irregular remainder where not all streams get a new element
+            {
+                let mut left_elems = left_chunks.into_remainder().iter_mut();
+                let mut right_elems = right_chunks.into_remainder().iter_mut();
+                let mut streams = streams.iter_mut();
+                'elems: loop {
+                    match ((left_elems.next(), right_elems.next()), streams.next()) {
+                        ((Some(left_elem), Some(right_elem)), Some(stream)) => {
+                            *left_elem = generate_element(stream, left_start + offset);
+                            *right_elem = generate_element(stream, right_start + offset);
+                            offset += 1;
+                        }
+                        ((None, None), Some(_)) => break 'elems,
+                        ((Some(_), None), _) | ((None, Some(_)), _) => {
+                            unreachable!("not possible with equal-length halves")
+                        }
+                        (_, None) => {
+                            unreachable!("should have remainder.len() < num_streams")
+                        }
                     }
                 }
             }
@@ -177,11 +184,14 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
             .map(|stream| std::mem::replace(stream, generator.new_stream()))
             .enumerate()
         {
-            stream.finalize(DataStream {
-                target,
-                stream_idx,
-                num_streams,
-            })
+            stream.finalize(
+                DataStream {
+                    target,
+                    stream_idx,
+                    num_streams,
+                },
+                rng,
+            )
         }
     }
 }
@@ -254,7 +264,7 @@ pub trait GeneratorStream<R: Rng> {
     /// repositioned in the data stream if necessary, provided that the result
     /// is subsequently fixed up to make it look as if the subnormal value was
     /// there from the beginning.
-    fn finalize(self, stream: DataStream<'_, Self::Float>);
+    fn finalize(self, stream: DataStream<'_, Self::Float>, rng: &mut R);
 }
 
 /// Single input data stream in the context of a global data set composed of
@@ -354,9 +364,68 @@ fn subnormal_picker<R: Rng>(
     }
 }
 
+/// Test utilities that are shared by this crate and other crates in the namespace
+#[cfg(any(test, feature = "unstable_test"))]
+pub mod test_utils {
+    use proptest::{prelude::*, sample::SizeRange};
+
+    /// Length of a dataset that can be reinterpreted as N streams of
+    /// scalars or pairs, where the streams may or may not be of equal length
+    pub(crate) fn target_len(num_streams: usize, pairs: bool) -> impl Strategy<Value = usize> {
+        // Decide how many streams will have more elements than the others
+        debug_assert!(num_streams > 0);
+        let num_longer_streams = if num_streams == 1 {
+            Just(0).boxed()
+        } else {
+            prop_oneof![
+                2 => Just(0),
+                3 => 1..num_streams,
+            ]
+            .boxed()
+        };
+
+        // Decide the length of the shortest streams of scalars/pairs
+        let scalars_per_stream_elem = 1 + pairs as usize;
+        let num_substreams = num_streams * scalars_per_stream_elem;
+        let default_sizes = SizeRange::default();
+        let min_substream_len =
+            (default_sizes.start() / num_substreams)..(default_sizes.end_excl() / num_substreams);
+
+        // Deduce the overall dataset length
+        (min_substream_len, num_longer_streams).prop_map(
+            move |(min_substream_len, num_longer_streams)| {
+                min_substream_len * num_substreams + num_longer_streams * scalars_per_stream_elem
+            },
+        )
+    }
+
+    /// Mostly-valid subnormal amounts, for a given total dataset length
+    pub(crate) fn num_subnormals(target_len: usize) -> impl Strategy<Value = usize> {
+        if target_len == 0 {
+            Just(0).boxed()
+        } else {
+            prop_oneof![
+                4 => 0..target_len,
+                1 => target_len..,
+            ]
+            .boxed()
+        }
+    }
+
+    /// Inputs for an input generator test
+    pub fn target_and_num_subnormals(ilp: usize) -> impl Strategy<Value = (Vec<f32>, usize)> {
+        target_len(ilp, false).prop_flat_map(|target_len| {
+            (
+                prop::collection::vec(any::<f32>(), target_len),
+                num_subnormals(target_len),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
+    use super::{test_utils::*, *};
     use crate::tests::assert_panics;
     use proptest::{prelude::*, sample::SizeRange};
     use std::{
@@ -430,36 +499,6 @@ pub(crate) mod tests {
         num_streams: usize,
     ) -> impl Iterator<Item = usize> {
         (0..).skip(stream_idx).step_by(num_streams)
-    }
-
-    /// Length of a dataset that can be reinterpreted as N streams of
-    /// scalars or pairs, where the streams may or may not be of equal length
-    pub fn target_len(num_streams: usize, pairs: bool) -> impl Strategy<Value = usize> {
-        // Decide how many streams will have more elements than the others
-        debug_assert!(num_streams > 0);
-        let num_longer_streams = if num_streams == 1 {
-            Just(0).boxed()
-        } else {
-            prop_oneof![
-                2 => Just(0),
-                3 => 1..num_streams,
-            ]
-            .boxed()
-        };
-
-        // Decide the length of the shortest streams of scalars/pairs
-        let scalars_per_stream_elem = 1 + pairs as usize;
-        let num_substreams = num_streams * scalars_per_stream_elem;
-        let default_sizes = SizeRange::default();
-        let min_substream_len =
-            (default_sizes.start() / num_substreams)..(default_sizes.end_excl() / num_substreams);
-
-        // Deduce the overall dataset length
-        (min_substream_len, num_longer_streams).prop_map(
-            move |(min_substream_len, num_longer_streams)| {
-                min_substream_len * num_substreams + num_longer_streams * scalars_per_stream_elem
-            },
-        )
     }
 
     /// Like [`target_len()`] but also generates the number of streams
@@ -646,25 +685,12 @@ pub(crate) mod tests {
             narrow
         }
 
-        fn finalize(self, stream: DataStream<'_, Self::Float>) {
+        fn finalize(self, stream: DataStream<'_, Self::Float>, _rng: &mut R) {
             self.0.borrow_mut().push(GeneratorStreamAction::Finalize {
                 target: NonNull::from(stream.target),
                 stream_idx: stream.stream_idx,
                 num_streams: stream.num_streams,
             });
-        }
-    }
-
-    /// Mostly-valid subnormal amounts, for a given total dataset length
-    pub fn num_subnormals(target_len: usize) -> impl Strategy<Value = usize> {
-        if target_len == 0 {
-            Just(0).boxed()
-        } else {
-            prop_oneof![
-                4 => 0..target_len,
-                1 => target_len..,
-            ]
-            .boxed()
         }
     }
 

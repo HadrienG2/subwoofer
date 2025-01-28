@@ -1,6 +1,6 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
-    floats::FloatLike,
+    floats::{self, FloatLike},
     inputs::{
         generators::{generate_input_pairs, DataStream, GeneratorStream, InputGenerator},
         Inputs, InputsMut,
@@ -346,10 +346,11 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                     )
                 }
                 FmaFullMaxState::LowerBound => {
-                    // 1/4 * random(2..8) = random(1/2..2)
-                    assert_eq!(lower_bound::<T>(), T::splat(0.25));
-                    let _2to8 = T::sampler(1..3)(rng);
-                    (_2to8, FmaFullMaxState::Narrow(_2to8 * lower_bound::<T>()))
+                    let recovery_multiplier = lower_recovery_multiplier(rng);
+                    (
+                        recovery_multiplier,
+                        FmaFullMaxState::Narrow(recovery_multiplier * lower_bound::<T>()),
+                    )
                 }
                 FmaFullMaxState::Subnormal => {
                     unreachable!("Previous MAX should have taken us out of this state")
@@ -403,7 +404,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
         value
     }
 
-    fn finalize(self, mut stream: DataStream<'_, T>) {
+    fn finalize(self, mut stream: DataStream<'_, T>, rng: &mut R) {
         assert_eq!(self.next_role, ValueRole::Multiplier);
         match self.state {
             FmaFullMaxState::Narrow(_) => {}
@@ -425,7 +426,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                 // by the next benchmark run (which will start by ~zeroing out
                 // the accumulator).
                 let mut pairs = stream.into_pair_iter();
-                let [first_multiplier, _first_addend] = pairs
+                let [first_multiplier, first_addend] = pairs
                     .next()
                     .expect("LowerBound is only reachable after >= 1 all-subnormal input pair");
                 if first_multiplier.is_subnormal() {
@@ -433,26 +434,48 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                 }
                 assert!(first_multiplier.is_normal());
 
-                // Otherwise we should exchange the last subnormal addend with
-                // the first normal input.
-                //
-                // This is enough to bring the accumulator to the standard
-                // "narrow" range again because...
-                //
-                // - If we reached the LowerBound state, it implies that the
-                //   last multiplier is subnormal, zeroing out any previous
-                //   state from the accumulator. The addend thus fully
-                //   determines the final accumulator state.
-                // - The former first multiplier, if normal, is guaranteed to be
-                //   in the same narrow range [1/2; 2[ that accumulators should
-                //   belong to. By adding it to the aforementioned subnormal
-                //   product, we end up with a Narrow initial accumulator again.
+                // Otherwise we should extract the last subnormal
+                // (addend, multiplier) pair...
                 let [last_multiplier, last_addend] = pairs.next_back().expect(
                     "Last input pair should be all-subnormal, it cannot be the first input pair if its multiplier is normal",
                 );
                 assert!(last_multiplier.is_subnormal());
                 assert!(last_addend.is_subnormal());
-                std::mem::swap(first_multiplier, last_addend);
+
+                // ...and swap it with the first pair coming before it in the
+                // sequence that is not all-subnormal. This is fine because...
+                // - There has to be a previous input pair that is not
+                //   all-subnormal because we just found the first pair isn't.
+                // - Removing a normal input that comes before a sequence of
+                //   all-subnormal values does not meaningfully affect
+                //   accumulator magnitude since the all-subnormal values
+                //   destroy the previous accumulator magnitude anyway.
+                let [prev_multiplier, prev_addend] = pairs
+                    .rev()
+                    .chain(std::iter::once([first_multiplier, first_addend]))
+                    .find(|[mul, add]| mul.is_normal() || add.is_normal())
+                    .expect("At least true for [first_multiplier, first_addend]");
+                std::mem::swap(last_multiplier, prev_multiplier);
+                std::mem::swap(last_addend, prev_addend);
+
+                // Finally, we should fix up the new last [multiplier, addend]
+                // pair so that it brings the accumulator back to the "narrow"
+                // [1/2; 2[ magnitude range that it started from.
+                match (last_multiplier.is_normal(), last_addend.is_normal()) {
+                    (true, true) | (true, false) => {
+                        *last_multiplier = lower_recovery_multiplier(rng);
+                        if last_addend.is_normal() {
+                            *last_addend = T::splat(0.0);
+                        }
+                    }
+                    (false, true) => {
+                        let narrow = floats::narrow_sampler();
+                        *last_addend = narrow(rng);
+                    }
+                    (false, false) => unreachable!(
+                        "We just ensured that the last input pair is not all-subnormal"
+                    ),
+                };
             }
             FmaFullMaxState::Subnormal => {
                 unreachable!("Previous MAX should have taken us out of this state")
@@ -462,4 +485,12 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
             }
         }
     }
+}
+
+/// Generate a multiplier that recovers an accumulator from a subnormal value
+/// (which takes it to its lower bound) back to narrow magnitude range [1/2; 2[
+fn lower_recovery_multiplier<T: FloatLike>(rng: &mut impl Rng) -> T {
+    // 1/4 * random(2..8) = random(1/2..2)
+    assert_eq!(lower_bound::<T>(), T::splat(0.25));
+    T::sampler(1..3)(rng)
 }

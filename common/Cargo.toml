@@ -11,11 +11,16 @@ repository.workspace = true
 version.workspace = true
 
 [features]
+# Enable support for std::simd types
 simd = []
+
+# Enable functionality that is used by unit tests of the other crates
+unstable_test = ["dep:proptest"]
 
 [dependencies]
 criterion.workspace = true
 pessimize.workspace = true
+proptest = { workspace = true, optional = true }
 rand.workspace = true
 target-features.workspace = true
 

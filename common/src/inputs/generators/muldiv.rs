@@ -1,7 +1,10 @@
 //! Input generator for benchmarks with a MUL/DIV pattern
 
 use super::{DataStream, GeneratorStream, InputGenerator};
-use crate::{floats::FloatLike, inputs::InputsMut};
+use crate::{
+    floats::{self, FloatLike},
+    inputs::InputsMut,
+};
 use rand::prelude::*;
 use std::marker::PhantomData;
 
@@ -162,7 +165,7 @@ where
         }
     }
 
-    fn finalize(self, stream: DataStream<'_, T>) {
+    fn finalize(self, stream: DataStream<'_, T>, rng: &mut R) {
         let mut stream = stream.into_scalar_iter();
         match self.state {
             MulDivState::Unconstrained => {}
@@ -175,10 +178,10 @@ where
             }
             MulDivState::CancelSubnormal => {
                 // A subnormal input brings the accumulator to an abnormal
-                // magnitude, so it can only be tolerated as the last input
-                // of the data stream if the resulting abnormal accumulator
-                // state is ignored by the next benchmark run (because that
-                // run starts with a subnormal input).
+                // magnitude, so it can only be tolerated as the last input of a
+                // data stream if the resulting abnormal accumulator state is
+                // (mostly) ignored by the next benchmark run because the first
+                // input of the data stream is also subnormal.
                 let first = stream
                     .next()
                     .expect("CancelSubnormal is only reachable after >= 1 subnormal inputs");
@@ -187,40 +190,191 @@ where
                 }
                 assert!(first.is_normal());
 
-                // Otherwise, we should exchange the last subnormal input
-                // with the first normal input...
+                // Otherwise we must isolate our trailing subnormal input...
                 let last = stream.next_back().expect(
-                    "Last input should be subnormal, it cannot be the first input if it's normal",
+                    "We know the last input is subnormal, it cannot also be the first input if it's normal",
                 );
                 assert!(last.is_subnormal());
-                std::mem::swap(first, last);
 
-                // ...and fix up that new trailing normal input so that it
-                // is correct in the context of the previous normal input
-                // values at the end of the stream.
-                let mut previous_normals = stream.rev().take_while(|elem| elem.is_normal());
-                if let Some(before_last) = previous_normals.next().copied() {
-                    let num_before_that = previous_normals.count();
-                    if num_before_that % 2 == 0 {
-                        // If there is an even number of inputs before
-                        // the second-to-last normal input, then this
-                        // normal input grows/shrinks the accumulator
-                        // and we should invert its effect to restore
-                        // the accumulator back to its initial value.
-                        *last = (self.generator.invert_normal)(before_last);
-                    } else {
-                        // If there is an odd number of inputs before
-                        // the second-to-last normal input, then this
-                        // second-to-last input brought the accumulator
-                        // back to its initial [1/2; 2[ range, and the
-                        // last normal input should keep the accumulator
-                        // in the same order of magnitude.
-                        *last = T::splat(1.0);
-                    }
-                }
+                // ...find the previous normal input in the data stream, coming
+                // before all the other subnormal inputs that precede our
+                // trailing subnormal input...
+                let prev_normal = stream
+                    .rev()
+                    .chain(std::iter::once(first))
+                    .find(|elem| elem.is_normal())
+                    .expect("first is normal, so this predicate will be true at least once");
+
+                // ...and shift our subnormal input there. It is safe to
+                // overwrite a normal input that precedes a sequence of
+                // subnormal inputs because subnormals destroy all previous
+                // accumulator magnitude information.
+                *prev_normal = *last;
+
+                // The last input of the data stream will then be turned into a
+                // normal input that recovers from the subnormals-induced
+                // accumulator magnitude change. As a result, the accumulator
+                // will be back to a narrow state after going through the full
+                // data stream, as it should.
+                let narrow = floats::narrow_sampler();
+                *last = (self.generator.cancel_subnormal)(narrow(rng));
             }
         }
     }
+}
+
+/// Test [`generate_muldiv_inputs()`] in a particular configuration
+///
+/// This is a common implementation detail of the unit tests of the `div_xyz`
+/// and `mul_max` benchmarks, that should not be relied on by non-test code.
+///
+/// Compared to [`generate_muldiv_inputs`], it makes the additional assumption
+/// that cancel_subnormal is a monotonic function, i.e. if we denote A and B to
+/// inputs, then for all inputs `A <= x <= B` we expect `min(f(A), f(B)) <= f(x)
+/// <= max(f(A), f(B))`.
+#[cfg(any(test, feature = "unstable_test"))]
+pub fn test_generate_muldiv_inputs<const ILP: usize>(
+    target: &mut [f32],
+    num_subnormals: usize,
+    invert_normal: impl Fn(f32) -> f32 + Clone + 'static,
+    cancel_subnormal: impl Fn(f32) -> f32 + Clone + 'static,
+    integrate: impl Fn(f32, f32) -> f32 + 'static,
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    // Imports specific to test functionality
+    use crate::{floats, tests::assert_panics};
+    use proptest::prelude::*;
+    use std::panic::AssertUnwindSafe;
+
+    // Generate the inputs
+    let mut rng = rand::thread_rng();
+    let generate = |mut target: &mut [f32], rng: &mut _| {
+        generate_muldiv_inputs::<_, ILP>(
+            &mut target,
+            rng,
+            num_subnormals,
+            invert_normal.clone(),
+            cancel_subnormal.clone(),
+        )
+    };
+    if num_subnormals > target.len() {
+        return assert_panics(AssertUnwindSafe(|| {
+            generate(target, &mut rng);
+        }));
+    }
+    generate(target, &mut rng);
+
+    // Set up narrow accumulators
+    let narrow = floats::narrow_sampler();
+    let accs_init: [f32; ILP] = std::array::from_fn(|_| narrow(&mut rng));
+    let mut accs = accs_init;
+
+    // Check the result and simulate its effect on narrow accumulators
+    let mut actual_subnormals = 0;
+    let mut expected_state: [MulDivState<f32>; ILP] =
+        std::array::from_fn(|_| MulDivState::Unconstrained);
+    let mut should_be_end = [false; ILP];
+    let context = |chunk_idx: usize, acc_idx| {
+        format!(
+            "\n\
+            * Starting from initial accumulator {:?}\n\
+            * After integrating input(s) {:?}\n",
+            accs_init[acc_idx],
+            target
+                .iter()
+                .skip(acc_idx)
+                .step_by(ILP)
+                .take(chunk_idx)
+                .collect::<Vec<_>>()
+        )
+    };
+    dbg!(&target);
+    for (chunk_idx, chunk) in target.chunks(ILP).enumerate() {
+        for (((acc_idx, &elem), acc), (expected_state, should_be_end)) in (chunk.iter().enumerate())
+            .zip(&mut accs)
+            .zip(expected_state.iter_mut().zip(&mut should_be_end))
+        {
+            let acc_before = *acc;
+            let acc_after = integrate(*acc, elem);
+            let context = || {
+                format!(
+                    "{}* While integrating next input {elem} into accumulator {acc_before}, with result {acc_after}\n",
+                    context(chunk_idx, acc_idx)
+                )
+            };
+            if elem.is_subnormal() {
+                actual_subnormals += 1;
+                *expected_state = MulDivState::CancelSubnormal;
+            } else if elem == 1.0 {
+                prop_assert_eq!(expected_state, &MulDivState::Unconstrained, "{}", context());
+                *should_be_end = true;
+            } else {
+                prop_assert!(elem.is_normal());
+                prop_assert!(!*should_be_end);
+                let expect_narrow_acc = || {
+                    prop_assert!(
+                        (0.5..=2.0).contains(&acc_after),
+                        "{}* Expected a new accumulator value in narrow range [0.5; 2] but got {acc_after}",
+                        context()
+                    );
+                    Ok(())
+                };
+                *expected_state = match *expected_state {
+                    MulDivState::Unconstrained => {
+                        prop_assert!(
+                            (0.5..=2.0).contains(&elem),
+                            "{}* Expected an input in narrow range [0.5; 2] but got {elem}",
+                            context()
+                        );
+                        MulDivState::InvertNormal(elem)
+                    }
+                    MulDivState::InvertNormal(inverted) => {
+                        let inverse = invert_normal(inverted);
+                        prop_assert_eq!(
+                            elem,
+                            inverse,
+                            "{}* Expected input {} that's the inverse of the previous input {}, but got {}",
+                            context(),
+                            inverse,
+                            inverted,
+                            elem
+                        );
+                        expect_narrow_acc()?;
+                        MulDivState::Unconstrained
+                    }
+                    MulDivState::CancelSubnormal => {
+                        let bound1 = cancel_subnormal(0.5);
+                        let bound2 = cancel_subnormal(2.0);
+                        let min = bound1.min(bound2);
+                        let max = bound2.max(bound2);
+                        prop_assert!(
+                            (min..=max).contains(&elem),
+                            "{}* Expected an input in subnormal recovery range [{min}; {max}] but got {elem}", context()
+                        );
+                        expect_narrow_acc()?;
+                        MulDivState::Unconstrained
+                    }
+                };
+            }
+            *acc = acc_after;
+        }
+    }
+
+    // Check that the input meets its goals of subnormal count and acc preservation
+    prop_assert_eq!(actual_subnormals, num_subnormals);
+    let first_inputs: [Option<f32>; ILP] = std::array::from_fn(|idx| target.get(idx).copied());
+    for ((acc_idx, final_acc), first_input) in accs.into_iter().enumerate().zip(first_inputs) {
+        if !first_input
+            .unwrap_or(f32::MIN_POSITIVE / 2.0)
+            .is_subnormal()
+        {
+            prop_assert!(
+                (0.5..=2.0).contains(&final_acc),
+                "{}* Expected a final accumulator value in narrow range [0.5; 2] but got {final_acc}",
+                context(target.len().div_ceil(ILP), acc_idx)
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -326,66 +480,58 @@ mod tests {
 
             // Determine the expected final output
             let mut expected = target.clone();
-            let last_input_inverts = 'fixup: {
+            let mut last_input_cancels_subnormal = false;
+            'fixup: {
                 let mut elements =
                     DataStream { target: &mut expected, stream_idx, num_streams }.into_scalar_iter();
                 match &stream.state {
-                    MulDivState::Unconstrained => {
-                        None
-                    }
+                    MulDivState::Unconstrained => {}
                     MulDivState::InvertNormal(_) => {
                         *elements.next_back().unwrap() = 1.0;
-                        None
                     }
                     MulDivState::CancelSubnormal => {
                         // If the first item is subnormal, we don't care
                         let first = elements.next().unwrap();
                         if first.is_subnormal() {
-                            break 'fixup None;
+                            break 'fixup;
                         }
 
-                        // Otherwise, put the subnormal input at the front...
+                        // Otherwise, shift the subnormal input earlier in the
+                        // data stream, before its subnormal neighbors...
                         let last = elements.next_back().unwrap();
-                        std::mem::swap(first, last);
+                        let prev_normal = elements
+                            .rev()
+                            .chain(std::iter::once(first))
+                            .find(|elem| elem.is_normal())
+                            .expect("first is normal, so this predicate will be true at least once");
+                        *prev_normal = *last;
 
-                        // ...then fixup new last normal number if needed to
-                        // cancel out the effect of previous normal numbers
-                        let mut previous_normals =
-                            elements.rev().take_while(|elem| elem.is_normal());
-                        if let Some(before_last) = previous_normals.next().copied() {
-                            let num_previous = previous_normals.count();
-                            if num_previous % 2 == 0 {
-                                // Must cancel effect of before_last
-                                Some(before_last)
-                            } else {
-                                // Must not introduce a new magnitude change
-                                *last = 1.0;
-                                None
-                            }
-                        } else {
-                            None
-                        }
+                        // ...then remember that the last input must
+                        // cancel a subnormal number
+                        last_input_cancels_subnormal = true;
                     }
                 }
-            };
+            }
 
             // Compute the final output after a state backup
             <MulDivStream<_, _, _> as GeneratorStream<ThreadRng>>::finalize(
                 stream,
-                DataStream { target: &mut target, stream_idx, num_streams }
+                DataStream { target: &mut target, stream_idx, num_streams },
+                rng,
             );
 
             // Check that we get the expected final state
-            let invert_normal_invocations = invert_normal_mock.new_invocations();
-            if let Some(last_input_inverts) = last_input_inverts {
-                prop_assert_eq!(invert_normal_invocations.len(), 1);
-                prop_assert_eq!(invert_normal_invocations[0].argument, last_input_inverts);
+            prop_assert!(invert_normal_mock.new_invocations().is_empty());
+            let cancel_subnormal_invocations = cancel_subnormal_mock.new_invocations();
+            if last_input_cancels_subnormal {
+                prop_assert_eq!(cancel_subnormal_invocations.len(), 1);
+                prop_assert!(cancel_subnormal_invocations[0].argument >= 0.5);
+                prop_assert!(cancel_subnormal_invocations[0].argument < 2.0);
                 let last_idx = stream_indices.last().unwrap();
-                expected[last_idx] = invert_normal_invocations[0].result;
+                expected[last_idx] = cancel_subnormal_invocations[0].result;
             } else {
-                prop_assert!(invert_normal_invocations.is_empty());
+                prop_assert!(cancel_subnormal_invocations.is_empty());
             }
-            prop_assert!(cancel_subnormal_mock.new_invocations().is_empty());
             prop_assert!(
                 target.into_iter().map(f32::to_bits)
                 .eq(expected.into_iter().map(f32::to_bits))

@@ -80,7 +80,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for AddStream<T> {
         }
     }
 
-    fn finalize(self, mut stream: DataStream<'_, T>) {
+    fn finalize(self, mut stream: DataStream<'_, T>, _rng: &mut R) {
         if let Self::Negate { global_idx, .. } = self {
             *stream.scalar_at(global_idx) = T::splat(0.0);
         }
@@ -92,7 +92,9 @@ mod tests {
     use super::*;
     use crate::{
         floats,
-        inputs::generators::tests::{num_subnormals, stream_target_subnormals, target_len},
+        inputs::generators::{
+            test_utils::target_and_num_subnormals, tests::stream_target_subnormals,
+        },
         tests::assert_panics,
     };
     use proptest::prelude::*;
@@ -149,7 +151,8 @@ mod tests {
             // Check that this is actually the output we get
             <AddStream<_> as GeneratorStream<ThreadRng>>::finalize(
                 stream,
-                DataStream { target: &mut target, stream_idx, num_streams }
+                DataStream { target: &mut target, stream_idx, num_streams },
+                rng,
             );
             prop_assert!(
                 target.into_iter().map(f32::to_bits)
@@ -218,16 +221,6 @@ mod tests {
             )
         }
         Ok(())
-    }
-    //
-    /// Inputs for a [`generate_add_inputs()`] test
-    fn target_and_num_subnormals(ilp: usize) -> impl Strategy<Value = (Vec<f32>, usize)> {
-        target_len(ilp, false).prop_flat_map(|target_len| {
-            (
-                prop::collection::vec(any::<f32>(), target_len),
-                num_subnormals(target_len),
-            )
-        })
     }
     //
     proptest! {

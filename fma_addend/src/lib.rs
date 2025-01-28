@@ -259,7 +259,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
         }
     }
 
-    fn finalize(self, mut stream: DataStream<'_, T>) {
+    fn finalize(self, mut stream: DataStream<'_, T>, _rng: &mut R) {
         // The last added normal value cannot be canceled out, so make it zero
         // to enforce that the accumulator is back to its initial value at the
         // end of the benchmark run.

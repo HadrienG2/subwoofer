@@ -7,7 +7,7 @@ pub mod floats;
 pub mod inputs;
 pub mod operations;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "unstable_test"))]
 pub(crate) mod tests {
     use proptest::prelude::*;
     use std::panic::{self, UnwindSafe};

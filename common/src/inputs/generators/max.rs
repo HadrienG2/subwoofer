@@ -39,7 +39,7 @@ pub fn generate_max_inputs<T: FloatLike, R: Rng>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{inputs::generators::tests::num_subnormals, tests::assert_panics};
+    use crate::{inputs::generators::test_utils::num_subnormals, tests::assert_panics};
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
 

@@ -433,6 +433,7 @@ name = "mul_max"
 version = "1.0.0"
 dependencies = [
  "common",
+ "proptest",
  "rand",
 ]
 
