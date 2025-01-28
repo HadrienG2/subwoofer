@@ -231,6 +231,7 @@ name = "div_denominator_min"
 version = "1.0.0"
 dependencies = [
  "common",
+ "proptest",
  "rand",
 ]
 
@@ -239,6 +240,7 @@ name = "div_numerator_max"
 version = "1.0.0"
 dependencies = [
  "common",
+ "proptest",
  "rand",
  "target-features",
 ]

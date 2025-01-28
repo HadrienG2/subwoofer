@@ -287,7 +287,6 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
                 .collect::<Vec<_>>()
         )
     };
-    dbg!(&target);
     for (chunk_idx, chunk) in target.chunks(ILP).enumerate() {
         for (((acc_idx, &elem), acc), (expected_state, should_be_end)) in (chunk.iter().enumerate())
             .zip(&mut accs)
@@ -359,7 +358,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
         }
     }
 
-    // Check that the input meets its goals of subnormal count and acc preservation
+    // Check that the input meets its goals of subnormal count and acc magnitude preservation
     prop_assert_eq!(actual_subnormals, num_subnormals);
     let first_inputs: [Option<f32>; ILP] = std::array::from_fn(|idx| target.get(idx).copied());
     for ((acc_idx, final_acc), first_input) in accs.into_iter().enumerate().zip(first_inputs) {
