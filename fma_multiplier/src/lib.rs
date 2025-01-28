@@ -25,7 +25,9 @@ impl Operation for FmaMultiplier {
     const AUX_REGISTERS_MEMOP: usize =
         1 + (!HAS_HARDWARE_NEGATED_FMA) as usize + (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element> {
         FmaMultiplierBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -40,11 +42,14 @@ struct FmaMultiplierBenchmark<Storage: InputsMut, const ILP: usize> {
 }
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBenchmark<Storage, ILP> {
+    type Float = Storage::Element;
+
     fn num_operations(&self) -> usize {
         operations::accumulated_len(&self.input_storage, ILP)
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
+        assert!(num_subnormals <= self.input_storage.as_ref().len());
         self.num_subnormals = Some(num_subnormals);
     }
 
@@ -80,6 +85,10 @@ struct FmaMultiplierRun<I: Inputs, const ILP: usize> {
 impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierRun<Storage, ILP> {
     type Float = Storage::Element;
 
+    fn inputs(&self) -> &[Self::Float] {
+        self.inputs.as_ref()
+    }
+
     #[inline]
     fn integrate_inputs(&mut self) {
         // Overall, this is just the add benchmark with a step size that is at
@@ -101,4 +110,10 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierRun<Storag
     fn accumulators(&self) -> &[Storage::Element] {
         &self.accumulators
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    common::test_unary_operation!(FmaMultiplier, 1, true, |_| true);
 }

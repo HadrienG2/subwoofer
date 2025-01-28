@@ -7,6 +7,9 @@ pub mod floats;
 pub mod inputs;
 pub mod operations;
 
+#[cfg(feature = "unstable_test")]
+pub use proptest;
+
 #[cfg(any(test, feature = "unstable_test"))]
 pub(crate) mod tests {
     use proptest::prelude::*;

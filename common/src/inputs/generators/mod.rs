@@ -364,7 +364,7 @@ fn subnormal_picker<R: Rng>(
     }
 }
 
-/// Test utilities that are shared by this crate and other crates in the namespace
+/// Test utilities that are shared by this crate and other crates in the workspace
 #[cfg(any(test, feature = "unstable_test"))]
 pub mod test_utils {
     use proptest::{prelude::*, sample::SizeRange};

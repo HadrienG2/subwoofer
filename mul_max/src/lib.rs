@@ -21,7 +21,9 @@ impl Operation for MulMax {
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = 1 + (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element> {
         MulMaxBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -36,11 +38,14 @@ struct MulMaxBenchmark<Storage: InputsMut, const ILP: usize> {
 }
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for MulMaxBenchmark<Storage, ILP> {
+    type Float = Storage::Element;
+
     fn num_operations(&self) -> usize {
         operations::accumulated_len(&self.input_storage, ILP)
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
+        assert!(num_subnormals <= self.input_storage.as_ref().len());
         self.num_subnormals = Some(num_subnormals);
     }
 
@@ -74,6 +79,10 @@ struct MulMaxRun<Storage: Inputs, const ILP: usize> {
 //
 impl<Storage: Inputs, const ILP: usize> BenchmarkRun for MulMaxRun<Storage, ILP> {
     type Float = Storage::Element;
+
+    fn inputs(&self) -> &[Self::Float] {
+        self.inputs.as_ref()
+    }
 
     #[inline]
     fn integrate_inputs(&mut self) {
@@ -164,4 +173,9 @@ mod tests {
             test_generate_inputs::<3>(&mut target, num_subnormals)?;
         }
     }
+
+    // Test the `Operation` implementation
+    common::test_unary_operation!(MulMax, 1, true, |input| {
+        input.is_some_and(|x| x.is_normal())
+    });
 }

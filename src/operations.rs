@@ -87,7 +87,7 @@ macro_rules! for_each_ilp {
             $(
                 $instantiated_ilp => {
                     let input_len = $input_storage.len();
-                    let benchmark = <$operation>::make_benchmark::<$instantiated_ilp>( &mut $input_storage[..] );
+                    let benchmark = <$operation>::make_benchmark::<_, $instantiated_ilp>( &mut $input_storage[..] );
                     let config = DataSourceConfiguration {
                         rng: $rng,
                         group: $group,
@@ -194,7 +194,7 @@ macro_rules! for_each_inputregs_and_ilp {
         match $selected_ilp {
             $(
                 $instantiated_ilp => {
-                    let benchmark = <$operation>::make_benchmark::<$instantiated_ilp>(
+                    let benchmark = <$operation>::make_benchmark::<_, $instantiated_ilp>(
                         [<$float as Default>::default(); $inputregs]
                     );
                     let config = DataSourceConfiguration {

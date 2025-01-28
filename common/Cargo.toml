@@ -15,10 +15,11 @@ version.workspace = true
 simd = []
 
 # Enable functionality that is used by unit tests of the other crates
-unstable_test = ["dep:proptest"]
+unstable_test = ["dep:num-traits", "dep:proptest"]
 
 [dependencies]
 criterion.workspace = true
+num-traits = { workspace = true, optional = true }
 pessimize.workspace = true
 proptest = { workspace = true, optional = true }
 rand.workspace = true

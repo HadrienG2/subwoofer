@@ -15,5 +15,8 @@ common.workspace = true
 pessimize.workspace = true
 rand.workspace = true
 
+[dev-dependencies]
+common = { workspace = true, features = ["unstable_test"] }
+
 [lib]
 bench = false

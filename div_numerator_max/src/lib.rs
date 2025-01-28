@@ -23,7 +23,9 @@ impl Operation for DivNumeratorMax {
     // memory input for the numerator of a division?
     const AUX_REGISTERS_MEMOP: usize = 1 + (!ALLOWS_DIV_MEMORY_NUMERATOR) as usize;
 
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element> {
         DivNumeratorMaxBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -38,11 +40,14 @@ struct DivNumeratorMaxBenchmark<Storage: InputsMut, const ILP: usize> {
 }
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for DivNumeratorMaxBenchmark<Storage, ILP> {
+    type Float = Storage::Element;
+
     fn num_operations(&self) -> usize {
         operations::accumulated_len(&self.input_storage, ILP)
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
+        assert!(num_subnormals <= self.input_storage.as_ref().len());
         self.num_subnormals = Some(num_subnormals);
     }
 
@@ -76,6 +81,10 @@ struct DivNumeratorMaxRun<Storage: Inputs, const ILP: usize> {
 //
 impl<Storage: Inputs, const ILP: usize> BenchmarkRun for DivNumeratorMaxRun<Storage, ILP> {
     type Float = Storage::Element;
+
+    fn inputs(&self) -> &[Self::Float] {
+        self.inputs.as_ref()
+    }
 
     #[inline]
     fn integrate_inputs(&mut self) {
@@ -167,4 +176,9 @@ mod tests {
             test_generate_inputs::<3>(&mut target, num_subnormals)?;
         }
     }
+
+    // Test the `Operation` implementation
+    common::test_unary_operation!(DivNumeratorMax, 1, true, |first_input| {
+        first_input.is_some_and(|x| x.is_normal())
+    });
 }

@@ -27,7 +27,9 @@ impl Operation for SqrtPositiveMax {
     // was used to load the input in order to hold the square root.
     const AUX_REGISTERS_MEMOP: usize = 1;
 
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element> {
         SqrtPositiveMaxBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -42,11 +44,14 @@ struct SqrtPositiveMaxBenchmark<Storage: InputsMut, const ILP: usize> {
 }
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for SqrtPositiveMaxBenchmark<Storage, ILP> {
+    type Float = Storage::Element;
+
     fn num_operations(&self) -> usize {
         operations::accumulated_len(&self.input_storage, ILP)
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
+        assert!(num_subnormals <= self.input_storage.as_ref().len());
         self.num_subnormals = Some(num_subnormals);
     }
 
@@ -78,6 +83,10 @@ struct SqrtPositiveMaxRun<I: Inputs, const ILP: usize> {
 //
 impl<I: Inputs, const ILP: usize> BenchmarkRun for SqrtPositiveMaxRun<I, ILP> {
     type Float = I::Element;
+
+    fn inputs(&self) -> &[Self::Float] {
+        self.inputs.as_ref()
+    }
 
     #[inline]
     fn integrate_inputs(&mut self) {
@@ -124,4 +133,10 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for SqrtPositiveMaxRun<I, ILP> {
     fn accumulators(&self) -> &[I::Element] {
         &self.accumulators
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    common::test_unary_operation!(SqrtPositiveMax, 1, false, |_| false);
 }

@@ -510,19 +510,15 @@ pub fn subnormal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// Test utilities that are shared by this crate and other crates in the workspace
+#[cfg(any(test, feature = "unstable_test"))]
+pub mod test_utils {
     use super::*;
-    use crate::tests::assert_panics;
-    use num_traits::{Float, NumCast};
-    use proptest::prelude::*;
-    use std::{num::FpCategory, slice};
-
-    /// Number of samples used in sampler tests
-    const NUM_SAMPLES: usize = 100;
+    use num_traits::Float;
+    use std::slice;
 
     /// Reinterpret a FloatLike as an array of simpler scalar floats
-    trait FloatLikeExt: FloatLike {
+    pub trait FloatLikeExt: FloatLike {
         type Scalar: Debug + Float;
         fn as_scalars(&self) -> &[Self::Scalar];
     }
@@ -567,6 +563,18 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{test_utils::*, *};
+    use crate::tests::assert_panics;
+    use num_traits::{Float, NumCast};
+    use proptest::prelude::*;
+    use std::num::FpCategory;
+
+    /// Number of samples used in sampler tests
+    const NUM_SAMPLES: usize = 100;
 
     /// Test properties common to all FloatLike values
     fn test_value<T: FloatLikeExt>(x: T) -> Result<(), TestCaseError> {

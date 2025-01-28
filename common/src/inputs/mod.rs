@@ -168,6 +168,28 @@ impl<'buffer, T: FloatLike> Inputs for &'buffer mut [T] {
 //
 impl<T: FloatLike> InputsMut for &mut [T] {}
 
+/// Test utilities that are used by other crates in the workspace
+#[cfg(feature = "unstable_test")]
+pub mod test_utils {
+    use proptest::{prelude::*, sample::SizeRange};
+
+    /// Generate an arbitrary f32 (including NaN)
+    fn any_f32() -> impl Strategy<Value = f32> {
+        use prop::num::f32::*;
+        POSITIVE | NEGATIVE | NORMAL | SUBNORMAL | ZERO | INFINITE | QUIET_NAN
+    }
+
+    /// Generate a array of f32s
+    pub fn f32_array<const SIZE: usize>() -> impl Strategy<Value = [f32; SIZE]> {
+        std::array::from_fn(|_| any_f32())
+    }
+
+    /// Generate a Vec of f32s
+    pub fn f32_vec() -> impl Strategy<Value = Vec<f32>> {
+        prop::collection::vec(any_f32(), SizeRange::default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

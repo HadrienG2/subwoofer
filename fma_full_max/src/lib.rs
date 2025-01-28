@@ -27,7 +27,9 @@ impl Operation for FmaFullMax {
     // we still need to reserve one register for loading the other input.
     const AUX_REGISTERS_MEMOP: usize = 2 + (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element> {
         FmaFullMaxBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -42,11 +44,14 @@ struct FmaFullMaxBenchmark<Storage: InputsMut, const ILP: usize> {
 }
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaFullMaxBenchmark<Storage, ILP> {
+    type Float = Storage::Element;
+
     fn num_operations(&self) -> usize {
         operations::accumulated_len(&self.input_storage, ILP) / 2
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
+        assert!(num_subnormals <= self.input_storage.as_ref().len());
         self.num_subnormals = Some(num_subnormals);
     }
 
@@ -80,6 +85,10 @@ struct FmaFullMaxRun<Storage: Inputs, const ILP: usize> {
 //
 impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaFullMaxRun<Storage, ILP> {
     type Float = Storage::Element;
+
+    fn inputs(&self) -> &[Self::Float] {
+        self.inputs.as_ref()
+    }
 
     #[inline]
     fn integrate_inputs(&mut self) {

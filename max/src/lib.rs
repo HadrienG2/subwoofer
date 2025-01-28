@@ -32,7 +32,9 @@ impl Operation for Max {
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element> {
         MaxBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -47,11 +49,14 @@ struct MaxBenchmark<Storage: InputsMut, const ILP: usize> {
 }
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for MaxBenchmark<Storage, ILP> {
+    type Float = Storage::Element;
+
     fn num_operations(&self) -> usize {
         operations::accumulated_len(&self.input_storage, ILP)
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
+        assert!(num_subnormals <= self.input_storage.as_ref().len());
         self.num_subnormals = Some(num_subnormals);
     }
 
@@ -84,6 +89,10 @@ struct MaxRun<I: Inputs, const ILP: usize> {
 impl<I: Inputs, const ILP: usize> BenchmarkRun for MaxRun<I, ILP> {
     type Float = I::Element;
 
+    fn inputs(&self) -> &[Self::Float] {
+        self.inputs.as_ref()
+    }
+
     #[inline]
     fn integrate_inputs(&mut self) {
         // No need to hide inputs for this benchmark, the compiler can't exploit
@@ -103,4 +112,10 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for MaxRun<I, ILP> {
     fn accumulators(&self) -> &[I::Element] {
         &self.accumulators
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    common::test_unary_operation!(Max, 1, false, |_| false);
 }

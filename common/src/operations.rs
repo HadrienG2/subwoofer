@@ -27,11 +27,16 @@ pub trait Operation: Copy {
     const AUX_REGISTERS_MEMOP: usize;
 
     /// Setup a benchmark with some input storage & accumulation parallelism
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark;
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element>;
 }
 //
 /// Microbenchmark of a certain [`Operation`]
 pub trait Benchmark {
+    /// Floating-point type that is being exercised
+    type Float: FloatLike;
+
     /// Number of hardware operations under study that this benchmark will
     /// execute when processing the previously specified input dataset
     ///
@@ -47,8 +52,10 @@ pub trait Benchmark {
 
     /// Specify the desired share of subnormal numbers in the input dataset.
     ///
-    /// The specified `num_subnormals` subnormal count must be smaller than or
-    /// equal to the length of the underlying input storage.
+    /// # Panics
+    ///
+    /// Panics if the specified `num_subnormals` is greater than the length of
+    /// the underlying input storage.
     fn setup_inputs(&mut self, num_subnormals: usize);
 
     /// Start a new benchmark run (= repeated passes through identical inputs)
@@ -88,7 +95,7 @@ pub trait Benchmark {
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_>;
 
     /// State of an ongoing execution of this benchmark
-    type Run<'run>: BenchmarkRun
+    type Run<'run>: BenchmarkRun<Float = Self::Float>
     where
         Self: 'run;
 }
@@ -97,6 +104,12 @@ pub trait Benchmark {
 pub trait BenchmarkRun {
     /// Floating-point type that is being exercised
     type Float: FloatLike;
+
+    /// Access the internal input dataset
+    ///
+    /// This API is only meant for use by the unit test procedures defined in
+    /// `test_utils` and should not be used for other purposes.
+    fn inputs(&self) -> &[Self::Float];
 
     /// Integrate the input dataset into the inner accumulators
     ///
@@ -345,5 +358,376 @@ pub fn hide_single_accumulator<T: FloatLike>(accumulator: T) -> T {
         pessimize::hide::<T>(accumulator)
     } else {
         accumulator
+    }
+}
+
+/// Test utilities that are used by other crates in the workspace
+#[cfg(feature = "unstable_test")]
+#[doc(hidden)]
+pub mod test_utils {
+    use super::*;
+    use crate::{
+        arch::MIN_FLOAT_REGISTERS,
+        floats::test_utils::FloatLikeExt,
+        inputs::{
+            generators::test_utils::num_subnormals,
+            test_utils::{f32_array, f32_vec},
+        },
+        tests::assert_panics,
+    };
+    use num_traits::NumCast;
+    use proptest::prelude::*;
+    use std::panic::AssertUnwindSafe;
+
+    /// Number of benchmark iterations performed by test_benchmark_run
+    const NUM_TEST_ITERATIONS: usize = 100;
+
+    /// Tolerance to accumulators not being perfectly in the "narrow"
+    /// [0.5; 2] range at the end of a single benchmark iteration
+    const NON_NARROW_TOLERANCE: f32 = 0.000001;
+
+    /// Generate unit tests for a certain [`Operation`] that takes one input
+    #[doc(hidden)]
+    #[macro_export]
+    macro_rules! test_unary_operation {
+        ($op:ty, $inputs_per_op:literal, $needs_narrow_accs_initially:literal, $needs_narrow_accs_after_input:expr) => {
+            mod operation {
+                use super::*;
+                use $crate::{
+                    floats::test_utils::FloatLikeExt,
+                    inputs::test_utils::{f32_array, f32_vec},
+                    operations::test_utils::{
+                        self as operation_utils, f32_array_and_num_nubnormals, f32_vec_and_num_subnormals,
+                    },
+                    proptest::prelude::*,
+                };
+
+                #[test]
+                fn metadata() {
+                    operation_utils::test_operation_metadata::<$op>();
+                }
+
+                fn test_num_benchmark_operations<const ILP: usize>(
+                    input_storage: impl InputsMut,
+                ) -> Result<(), TestCaseError> {
+                    operation_utils::test_num_benchmark_operations::<$op, _, { ILP }>(
+                        input_storage,
+                        $inputs_per_op,
+                    )
+                }
+
+                proptest! {
+                    #[test]
+                    fn num_benchmark_operations_1reg_ilp1(regs in f32_array::<1>()) {
+                        test_num_benchmark_operations::<1>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_1reg_ilp2(regs in f32_array::<1>()) {
+                        test_num_benchmark_operations::<2>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_1reg_ilp3(regs in f32_array::<1>()) {
+                        test_num_benchmark_operations::<3>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_2regs_ilp1(regs in f32_array::<2>()) {
+                        test_num_benchmark_operations::<1>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_2regs_ilp2(regs in f32_array::<2>()) {
+                        test_num_benchmark_operations::<2>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_2regs_ilp3(regs in f32_array::<2>()) {
+                        test_num_benchmark_operations::<3>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_3regs_ilp1(regs in f32_array::<3>()) {
+                        test_num_benchmark_operations::<1>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_3regs_ilp2(regs in f32_array::<3>()) {
+                        test_num_benchmark_operations::<2>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_3regs_ilp3(regs in f32_array::<3>()) {
+                        test_num_benchmark_operations::<3>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_4regs_ilp1(regs in f32_array::<4>()) {
+                        test_num_benchmark_operations::<1>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_4regs_ilp2(regs in f32_array::<4>()) {
+                        test_num_benchmark_operations::<2>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_4regs_ilp3(regs in f32_array::<4>()) {
+                        test_num_benchmark_operations::<3>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_mem_ilp1(mut mem in f32_vec()) {
+                        test_num_benchmark_operations::<1>(&mut mem[..])?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_mem_ilp2(mut mem in f32_vec()) {
+                        test_num_benchmark_operations::<2>(&mut mem[..])?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_mem_ilp3(mut mem in f32_vec()) {
+                        test_num_benchmark_operations::<3>(&mut mem[..])?;
+                    }
+                }
+
+                fn test_benchmark_run<Storage: InputsMut, const ILP: usize>(
+                    input_storage: Storage,
+                    num_subnormals: usize,
+                ) -> Result<(), TestCaseError> where Storage::Element: FloatLikeExt {
+                    operation_utils::test_benchmark_run::<$op, _, { ILP }>(
+                        input_storage,
+                        num_subnormals,
+                        $needs_narrow_accs_initially,
+                        $needs_narrow_accs_after_input,
+                    )
+                }
+
+                proptest! {
+                    #[test]
+                    fn benchmark_run_1reg_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<1>()) {
+                        test_benchmark_run::<_, 1>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_1reg_ilp2((regs, num_subnormals) in f32_array_and_num_nubnormals::<1>()) {
+                        test_benchmark_run::<_, 2>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_1reg_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<1>()) {
+                        test_benchmark_run::<_, 3>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_2regs_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<2>()) {
+                        test_benchmark_run::<_, 1>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_2regs_ilp2((regs, num_subnormals) in f32_array_and_num_nubnormals::<2>()) {
+                        test_benchmark_run::<_, 2>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_2regs_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<2>()) {
+                        test_benchmark_run::<_, 3>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_3regs_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<3>()) {
+                        test_benchmark_run::<_, 1>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_3regs_ilp2((regs, num_subnormals) in f32_array_and_num_nubnormals::<3>()) {
+                        test_benchmark_run::<_, 2>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_3regs_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<3>()) {
+                        test_benchmark_run::<_, 3>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_4regs_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<4>()) {
+                        test_benchmark_run::<_, 1>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_4regs_ilp2((regs, num_subnormals) in f32_array_and_num_nubnormals::<4>()) {
+                        test_benchmark_run::<_, 2>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_4regs_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<4>()) {
+                        test_benchmark_run::<_, 3>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_mem_ilp1((mut mem, num_subnormals) in f32_vec_and_num_subnormals()) {
+                        test_benchmark_run::<_, 1>(&mut mem[..], num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_mem_ilp2((mut mem, num_subnormals) in f32_vec_and_num_subnormals()) {
+                        test_benchmark_run::<_, 2>(&mut mem[..], num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_mem_ilp3((mut mem, num_subnormals) in f32_vec_and_num_subnormals()) {
+                        test_benchmark_run::<_, 3>(&mut mem[..], num_subnormals)?;
+                    }
+                }
+            }
+        };
+    }
+
+    /// Generate a array of f32s and a matching num_subnormals configuration
+    pub fn f32_array_and_num_nubnormals<const SIZE: usize>(
+    ) -> impl Strategy<Value = ([f32; SIZE], usize)> {
+        (f32_array(), num_subnormals(SIZE))
+    }
+
+    /// Generate a Vec of f32s and a matching num_subnormals configuration
+    pub fn f32_vec_and_num_subnormals() -> impl Strategy<Value = (Vec<f32>, usize)> {
+        f32_vec().prop_flat_map(|v| {
+            let v_len = v.len();
+            (Just(v), num_subnormals(v_len))
+        })
+    }
+
+    /// Check that operation metadata makes basic sense
+    pub fn test_operation_metadata<Op: Operation>() {
+        assert!(!Op::NAME.is_empty());
+        assert!(Op::AUX_REGISTERS_MEMOP < MIN_FLOAT_REGISTERS);
+        assert!(Op::aux_registers_regop(2) < MIN_FLOAT_REGISTERS);
+    }
+
+    /// Instantiate a benchmark and check its advertised operation count
+    pub fn test_num_benchmark_operations<Op: Operation, Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+        inputs_per_op: usize,
+    ) -> Result<(), TestCaseError> {
+        // Determine and check effective input length
+        let accumulated_len = accumulated_len(&input_storage, ILP);
+        assert_eq!(
+            accumulated_len % inputs_per_op,
+            0,
+            "Invalid test input length"
+        );
+
+        // Instantiate benchmark
+        let benchmark = Op::make_benchmark::<_, ILP>(input_storage);
+
+        // Check that the number of operation matches expectations
+        prop_assert_eq!(benchmark.num_operations(), accumulated_len / inputs_per_op);
+        Ok(())
+    }
+
+    /// Simulate a benchmark run
+    pub fn test_benchmark_run<Op: Operation, Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+        num_subnormals: usize,
+        needs_narrow_accs_initially: bool,
+        needs_narrow_accs_before_first_input: impl Fn(Option<Storage::Element>) -> bool,
+    ) -> Result<(), TestCaseError>
+    where
+        Storage::Element: FloatLikeExt,
+    {
+        // Collect input_storage metadata while we can
+        let input_slice = input_storage.as_ref();
+        let input_len = input_slice.len();
+        let input_is_reused = Storage::KIND.is_reused();
+
+        // Set up a benchmark run
+        let mut benchmark = Op::make_benchmark::<_, ILP>(input_storage);
+        let initial_num_ops = benchmark.num_operations();
+        if num_subnormals > input_len {
+            return assert_panics(AssertUnwindSafe(|| benchmark.setup_inputs(num_subnormals)));
+        } else {
+            benchmark.setup_inputs(num_subnormals);
+        }
+        prop_assert_eq!(benchmark.num_operations(), initial_num_ops);
+        {
+            let mut run = benchmark.start_run(&mut rand::thread_rng());
+
+            // Check generated input values
+            let mut actual_subnormals = 0;
+            let initial_inputs = run.inputs().to_owned();
+            assert_eq!(initial_inputs.len(), input_len);
+            for &input in &initial_inputs {
+                if input.is_subnormal() {
+                    actual_subnormals += 1;
+                } else {
+                    prop_assert!(input.is_normal() || input == Storage::Element::splat(0.0));
+                }
+            }
+            prop_assert_eq!(actual_subnormals, num_subnormals);
+
+            // Determine what is the first input that is going to be fed to each accumulator
+            let first_input_per_acc = if input_is_reused {
+                vec![initial_inputs.first().copied(); ILP]
+            } else {
+                initial_inputs
+                    .iter()
+                    .map(|input| Some(*input))
+                    .chain(std::iter::repeat(None))
+                    .take(ILP)
+                    .collect()
+            };
+
+            // Check initial accumulator values
+            fn check_accs<R: BenchmarkRun>(
+                run: &R,
+                first_input_per_acc: &[Option<R::Float>],
+                needs_narrow_accs_before_first_input: impl Fn(Option<R::Float>) -> bool,
+                tolerance: f32,
+            ) -> Result<(), TestCaseError>
+            where
+                R::Float: FloatLikeExt,
+            {
+                for (acc, &first_input) in run.accumulators().iter().zip(first_input_per_acc) {
+                    if dbg!(needs_narrow_accs_before_first_input(dbg!(first_input))) {
+                        for scalar in acc.as_scalars() {
+                            let scalar_from_f32 = |x: f32| {
+                                <<R::Float as FloatLikeExt>::Scalar as NumCast>::from(x).unwrap()
+                            };
+                            prop_assert!(dbg!(*scalar) >= scalar_from_f32(0.5 - tolerance));
+                            prop_assert!(*scalar <= scalar_from_f32(2.0 + tolerance));
+                        }
+                    } else {
+                        prop_assert!(acc.is_normal());
+                    }
+                }
+                Ok(())
+            }
+            check_accs(
+                &run,
+                &first_input_per_acc,
+                |_| needs_narrow_accs_initially,
+                0.0,
+            )?;
+
+            // Perform a number of benchmark iterations
+            for _ in 0..NUM_TEST_ITERATIONS {
+                run.integrate_inputs();
+            }
+
+            // Check that run invariants are preserved over iterations
+            prop_assert_eq!(run.inputs(), &initial_inputs);
+            check_accs(
+                &run,
+                &first_input_per_acc,
+                needs_narrow_accs_before_first_input,
+                NON_NARROW_TOLERANCE * NUM_TEST_ITERATIONS as f32,
+            )?;
+        }
+
+        // Check that benchmark invariants are preserved over iterations
+        prop_assert_eq!(benchmark.num_operations(), initial_num_ops);
+        Ok(())
     }
 }
