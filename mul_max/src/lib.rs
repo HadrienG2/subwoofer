@@ -175,7 +175,7 @@ mod tests {
     }
 
     // Test the `Operation` implementation
-    common::test_unary_operation!(MulMax, 1, true, |input| {
-        input.is_some_and(|x| x.is_normal())
+    common::test_unary_operation!(MulMax, 1, true, |first_input| {
+        first_input.is_some_and(|x| x.is_normal())
     });
 }
