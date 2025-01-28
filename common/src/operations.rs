@@ -390,7 +390,7 @@ pub mod test_utils {
     #[doc(hidden)]
     #[macro_export]
     macro_rules! test_unary_operation {
-        ($op:ty, $inputs_per_op:literal, $needs_narrow_accs_initially:literal, $needs_narrow_accs_after_input:expr) => {
+        ($op:ty, $inputs_per_op:literal, $needs_narrow_accs_initially:literal, $needs_narrow_accs_before_first_input:expr) => {
             mod operation {
                 use super::*;
                 use $crate::{
@@ -501,7 +501,7 @@ pub mod test_utils {
                         input_storage,
                         num_subnormals,
                         $needs_narrow_accs_initially,
-                        $needs_narrow_accs_after_input,
+                        $needs_narrow_accs_before_first_input,
                     )
                 }
 
