@@ -403,9 +403,13 @@ pub mod test_utils {
     pub(crate) fn num_subnormals(target_len: usize) -> impl Strategy<Value = usize> {
         if target_len == 0 {
             Just(0).boxed()
+        } else if target_len == 1 {
+            (0usize..=1).boxed()
         } else {
             prop_oneof![
-                4 => 0..target_len,
+                1 => Just(0),
+                3 => 1..target_len,
+                1 => Just(target_len),
                 1 => target_len..,
             ]
             .boxed()
