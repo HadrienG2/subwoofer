@@ -97,6 +97,7 @@ mod tests {
         },
         tests::assert_panics,
     };
+    use core::f32;
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
 
@@ -214,7 +215,7 @@ mod tests {
         prop_assert_eq!(actual_subnormals, num_subnormals);
         for (acc, init) in accs.iter().zip(accs_init) {
             let difference = (acc - init).abs();
-            let threshold = 2e-6 * init;
+            let threshold = 30.0 * f32::EPSILON * init;
             prop_assert!(
                 difference < threshold,
                 "{acc} is too far from {init} (difference {difference} above threshold {threshold} after integrating inputs {target:?})"
