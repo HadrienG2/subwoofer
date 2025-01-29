@@ -50,8 +50,9 @@ jobs:
           path: ./public
           if-no-files-found: error
 
-  # Format doesn't depend on configuration
-  format:
+
+  # Formatter output and dependency checking don't depend on cargo features / OS
+  format-machete:
     # Don't run CI twice when a PR is created from a branch internal to the repo
     # Don't run in scheduled jobs, that's what "scheduled" is for
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
@@ -70,6 +71,18 @@ jobs:
 
       - name: Check code formatting
         run: cargo fmt --all --check
+
+      - name: Install cargo-machete
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-machete
+
+      - name: Look for unused dependencies with cargo-machete
+        run: |
+          # FIXME: --force used as a workaround for https://github.com/Swatinem/rust-cache/issues/204
+          cargo binstall -y --force cargo-machete
+          cargo machete
+
 
   # Lints can vary depending on hardware and benchmark features
   lints:
@@ -112,6 +125,48 @@ jobs:
       - name: Check clippy lints
         run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
 
+
+  # Run the tests on all supported OSes (main CI)
+  test-contrib:
+    # Don't run CI twice when a PR is created from a branch internal to the repo
+    # Don't run in scheduled jobs, that's what test-scheduled is for
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+
+    runs-on: ${{ matrix.os }}
+
+    needs: matrix_vars
+
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        features:
+          - "--no-default-features --features=check"
+          - ""
+          - "--features=measure"
+          - "--all-features"
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up hwloc
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          version: 1.0
+          packages: libhwloc-dev libudev-dev
+
+      - name: Install cargo-nextest
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-nextest
+
+      - name: Run tests
+        run: cargo nextest --workspace ${{ matrix.features }}
+
+
   # Update the book if all other CI jobs pass
   deploy-book:
     # Don't run on a schedule, book doesn't change on its own.
@@ -124,7 +179,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
-    needs: ["render-book", "format", "lints"]
+    needs: ["render-book", "format-machete", "lints", "test-contrib"]
 
     # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
     permissions:
@@ -201,3 +256,12 @@ jobs:
 
       - name: Check clippy lints
         run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
+
+      - name: Install cargo-nextest
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-nextest
+
+      - name: Run the tests
+        run: cargo nextest --workspace ${{ matrix.features }}
+
