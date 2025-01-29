@@ -172,6 +172,7 @@ impl<T: FloatLike> InputsMut for &mut [T] {}
 #[cfg(feature = "unstable_test")]
 pub mod test_utils {
     use proptest::{prelude::*, sample::SizeRange};
+    use std::ops::Range;
 
     /// Generate an arbitrary f32 (including NaN)
     fn any_f32() -> impl Strategy<Value = f32> {
@@ -185,8 +186,21 @@ pub mod test_utils {
     }
 
     /// Generate a Vec of f32s
-    pub fn f32_vec() -> impl Strategy<Value = Vec<f32>> {
-        prop::collection::vec(any_f32(), SizeRange::default())
+    pub fn f32_vec(pairwise: bool) -> impl Strategy<Value = Vec<f32>> {
+        let size_range = Range::from(SizeRange::default());
+        let size = if pairwise {
+            prop_oneof![
+                4 => {
+                    ((size_range.start / 2)..(size_range.end / 2))
+                        .prop_map(|num_pairs| num_pairs * 2)
+                },
+                1 => size_range,
+            ]
+            .boxed()
+        } else {
+            size_range.boxed()
+        };
+        size.prop_flat_map(|size| prop::collection::vec(any_f32(), size))
     }
 }
 

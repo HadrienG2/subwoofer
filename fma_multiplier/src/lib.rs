@@ -115,5 +115,6 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierRun<Storag
 #[cfg(test)]
 mod tests {
     use super::*;
-    common::test_unary_operation!(FmaMultiplier, 1, true, |_| true);
+    use common::operations::test_utils::NeedsNarrowAcc;
+    common::test_scalar_operation!(FmaMultiplier, NeedsNarrowAcc::Always, 20.0 * f32::EPSILON);
 }

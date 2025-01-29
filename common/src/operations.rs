@@ -260,9 +260,9 @@ pub fn integrate_pairs<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
     assert_eq!(inputs_len % 2, 0);
     let (left, right) = inputs.split_at(inputs_len / 2);
     if I::KIND.is_reused() {
-        for (&elem1, &elem2) in left.iter().zip(right) {
+        for (&left_elem, &right_elem) in left.iter().zip(right) {
             for acc in accumulators.iter_mut() {
-                *acc = iter(*acc, [elem1, elem2]);
+                *acc = iter(*acc, [left_elem, right_elem]);
             }
             hide_accumulators(accumulators);
         }
@@ -271,18 +271,22 @@ pub fn integrate_pairs<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
         let right_chunks = right.chunks_exact(ILP);
         let left_remainder = left_chunks.remainder();
         let right_remainder = right_chunks.remainder();
-        for (chunk1, chunk2) in left_chunks.zip(right_chunks) {
-            for ((&elem1, &elem2), acc) in chunk1.iter().zip(chunk2).zip(accumulators.iter_mut()) {
-                *acc = iter(*acc, [elem1, elem2]);
+        for (left_chunk, right_chunk) in left_chunks.zip(right_chunks) {
+            for ((&left_elem, &right_elem), acc) in left_chunk
+                .iter()
+                .zip(right_chunk)
+                .zip(accumulators.iter_mut())
+            {
+                *acc = iter(*acc, [left_elem, right_elem]);
             }
             hide_accumulators(accumulators);
         }
-        for ((&elem1, &elem2), acc) in left_remainder
+        for ((&left_elem, &right_elem), acc) in left_remainder
             .iter()
             .zip(right_remainder)
             .zip(accumulators.iter_mut())
         {
-            *acc = iter(*acc, [elem1, elem2]);
+            *acc = iter(*acc, [left_elem, right_elem]);
         }
     }
 }
@@ -363,7 +367,6 @@ pub fn hide_single_accumulator<T: FloatLike>(accumulator: T) -> T {
 
 /// Test utilities that are used by other crates in the workspace
 #[cfg(feature = "unstable_test")]
-#[doc(hidden)]
 pub mod test_utils {
     use super::*;
     use crate::{
@@ -379,42 +382,68 @@ pub mod test_utils {
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
 
-    /// Number of benchmark iterations performed by test_benchmark_run
+    /// Number of benchmark iterations performed by operation tests
     const NUM_TEST_ITERATIONS: usize = 100;
 
-    /// Tolerance to accumulators not being perfectly in the "narrow"
-    /// [0.5; 2] range at the end of a single benchmark iteration
-    const NON_NARROW_TOLERANCE: f32 = 0.000001;
+    /// Truth that a certain operation requires the benchmark's accumulators to
+    /// have a "narrow" magnitude (in range `[1/2; 2]`) at the start of a
+    /// benchmark iteration.
+    ///
+    /// This is the type of the `$needs_narrow_accs` argument to the
+    /// `test_xyz_operation!()` macros.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum NeedsNarrowAcc {
+        /// Accumulators should always have a narrow magnitude at the start of a
+        /// benchmark iteration.
+        ///
+        /// This is appropriate for "additive" benchmarks where integrating a
+        /// subnormal input into an accumulator will not destroy the original
+        /// accumulator magnitude information.
+        Always,
 
-    /// Generate unit tests for a certain [`Operation`] that takes one input
-    #[doc(hidden)]
+        /// Accumulators should initially have a narrow magnitude as in
+        /// `Always`, but are allowed to have a non-narrow magnitude at the
+        /// **end** of a benchmark iteration (and thus at the start of the next
+        /// iteration) if the first integrated input is subnormal.
+        ///
+        /// This is appropriate for "multiplicative" benchmarks where
+        /// integrating a subnormal input into an accumulator will destroy the
+        /// original accumulator magnitude information.
+        ///
+        /// For operations that work on pairs of inputs, the first input pair is
+        /// only considered to be a subnormal input if both elements from the
+        /// input pair are subnormal.
+        FirstNormal,
+
+        /// Accumulators never needs to have a narrow magnitude.
+        ///
+        /// This is appropriate for "comparative" benchmarks where the initial
+        /// accumulator magnitude does not meaningfully affect the benchmark's
+        /// behavior, as long as the accumulator remains a normal number.
+        Never,
+    }
+
+    /// Generate unit tests for a certain [`Operation`] where each accumulation
+    /// step ingests one input element
     #[macro_export]
-    macro_rules! test_unary_operation {
-        ($op:ty, $inputs_per_op:literal, $needs_narrow_accs_initially:literal, $needs_narrow_accs_before_first_input:expr) => {
+    macro_rules! test_scalar_operation {
+        ($op:ty, $needs_narrow_acc:expr) => {
+            $crate::test_scalar_operation!($op, $needs_narrow_acc, 0.0f32);
+        };
+        ($op:ty, $needs_narrow_acc:expr, $non_narrow_tolerance_per_iter:expr) => {
             mod operation {
                 use super::*;
                 use $crate::{
-                    floats::test_utils::FloatLikeExt,
-                    inputs::test_utils::{f32_array, f32_vec},
-                    operations::test_utils::{
-                        self as operation_utils, f32_array_and_num_nubnormals, f32_vec_and_num_subnormals,
-                    },
-                    proptest::prelude::*,
+                    inputs::test_utils::f32_array,
+                    operations::test_utils::f32_array_and_num_nubnormals,
                 };
-
-                #[test]
-                fn metadata() {
-                    operation_utils::test_operation_metadata::<$op>();
-                }
-
-                fn test_num_benchmark_operations<const ILP: usize>(
-                    input_storage: impl InputsMut,
-                ) -> Result<(), TestCaseError> {
-                    operation_utils::test_num_benchmark_operations::<$op, _, { ILP }>(
-                        input_storage,
-                        $inputs_per_op,
-                    )
-                }
+                $crate::_impl_operation_tests!(
+                    $op,
+                    $needs_narrow_acc,
+                    $non_narrow_tolerance_per_iter,
+                    false,
+                    1,
+                );
 
                 proptest! {
                     #[test]
@@ -478,35 +507,6 @@ pub mod test_utils {
                     }
 
                     #[test]
-                    fn num_benchmark_operations_mem_ilp1(mut mem in f32_vec()) {
-                        test_num_benchmark_operations::<1>(&mut mem[..])?;
-                    }
-
-                    #[test]
-                    fn num_benchmark_operations_mem_ilp2(mut mem in f32_vec()) {
-                        test_num_benchmark_operations::<2>(&mut mem[..])?;
-                    }
-
-                    #[test]
-                    fn num_benchmark_operations_mem_ilp3(mut mem in f32_vec()) {
-                        test_num_benchmark_operations::<3>(&mut mem[..])?;
-                    }
-                }
-
-                fn test_benchmark_run<Storage: InputsMut, const ILP: usize>(
-                    input_storage: Storage,
-                    num_subnormals: usize,
-                ) -> Result<(), TestCaseError> where Storage::Element: FloatLikeExt {
-                    operation_utils::test_benchmark_run::<$op, _, { ILP }>(
-                        input_storage,
-                        num_subnormals,
-                        $needs_narrow_accs_initially,
-                        $needs_narrow_accs_before_first_input,
-                    )
-                }
-
-                proptest! {
-                    #[test]
                     fn benchmark_run_1reg_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<1>()) {
                         test_benchmark_run::<_, 1>(regs, num_subnormals)?;
                     }
@@ -565,41 +565,227 @@ pub mod test_utils {
                     fn benchmark_run_4regs_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<4>()) {
                         test_benchmark_run::<_, 3>(regs, num_subnormals)?;
                     }
+                }
+            }
+        };
+    }
 
+    /// Generate unit tests for a certain [`Operation`] where each accumulation
+    /// step ingests two input element
+    #[macro_export]
+    macro_rules! test_pairwise_operation {
+        ($op:ty, $needs_narrow_acc:expr, $inputs_per_op:literal) => {
+            $crate::test_pairwise_operation!($op, $needs_narrow_acc, $inputs_per_op, 0.0f32);
+        };
+        ($op:ty, $needs_narrow_acc:expr, $inputs_per_op:literal, $non_narrow_tolerance_per_iter:expr) => {
+            mod operation {
+                use super::*;
+                use $crate::{
+                    inputs::test_utils::f32_array,
+                    operations::test_utils::f32_array_and_num_nubnormals,
+                };
+                $crate::_impl_operation_tests!(
+                    $op,
+                    $needs_narrow_acc,
+                    $non_narrow_tolerance_per_iter,
+                    true,
+                    $inputs_per_op,
+                );
+
+                proptest! {
                     #[test]
-                    fn benchmark_run_mem_ilp1((mut mem, num_subnormals) in f32_vec_and_num_subnormals()) {
-                        test_benchmark_run::<_, 1>(&mut mem[..], num_subnormals)?;
+                    fn num_benchmark_operations_2regs_ilp1(regs in f32_array::<2>()) {
+                        test_num_benchmark_operations::<1>(regs)?;
                     }
 
                     #[test]
-                    fn benchmark_run_mem_ilp2((mut mem, num_subnormals) in f32_vec_and_num_subnormals()) {
-                        test_benchmark_run::<_, 2>(&mut mem[..], num_subnormals)?;
+                    fn num_benchmark_operations_2regs_ilp2(regs in f32_array::<2>()) {
+                        test_num_benchmark_operations::<2>(regs)?;
                     }
 
                     #[test]
-                    fn benchmark_run_mem_ilp3((mut mem, num_subnormals) in f32_vec_and_num_subnormals()) {
-                        test_benchmark_run::<_, 3>(&mut mem[..], num_subnormals)?;
+                    fn num_benchmark_operations_2regs_ilp3(regs in f32_array::<2>()) {
+                        test_num_benchmark_operations::<3>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_4regs_ilp1(regs in f32_array::<4>()) {
+                        test_num_benchmark_operations::<1>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_4regs_ilp2(regs in f32_array::<4>()) {
+                        test_num_benchmark_operations::<2>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_4regs_ilp3(regs in f32_array::<4>()) {
+                        test_num_benchmark_operations::<3>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_6regs_ilp1(regs in f32_array::<6>()) {
+                        test_num_benchmark_operations::<1>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_6regs_ilp2(regs in f32_array::<6>()) {
+                        test_num_benchmark_operations::<2>(regs)?;
+                    }
+
+                    #[test]
+                    fn num_benchmark_operations_6regs_ilp3(regs in f32_array::<6>()) {
+                        test_num_benchmark_operations::<3>(regs)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_2regs_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<2>()) {
+                        test_benchmark_run::<_, 1>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_2regs_ilp2((regs, num_subnormals) in f32_array_and_num_nubnormals::<2>()) {
+                        test_benchmark_run::<_, 2>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_2regs_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<2>()) {
+                        test_benchmark_run::<_, 3>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_4regs_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<4>()) {
+                        test_benchmark_run::<_, 1>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_4regs_ilp2((regs, num_subnormals) in f32_array_and_num_nubnormals::<4>()) {
+                        test_benchmark_run::<_, 2>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_4regs_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<4>()) {
+                        test_benchmark_run::<_, 3>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_6regs_ilp1((regs, num_subnormals) in f32_array_and_num_nubnormals::<6>()) {
+                        test_benchmark_run::<_, 1>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_6regs_ilp2((regs, num_subnormals) in f32_array_and_num_nubnormals::<6>()) {
+                        test_benchmark_run::<_, 2>(regs, num_subnormals)?;
+                    }
+
+                    #[test]
+                    fn benchmark_run_6regs_ilp3((regs, num_subnormals) in f32_array_and_num_nubnormals::<6>()) {
+                        test_benchmark_run::<_, 3>(regs, num_subnormals)?;
                     }
                 }
             }
         };
     }
 
+    /// Common parts of [`test_unary_operation`] and [`test_binary_operation`]
+    ///
+    /// Must be instantiated in a dedicated module to avoid name collisions
+    #[doc(hidden)]
+    #[macro_export]
+    macro_rules! _impl_operation_tests {
+        ($op:ty, $needs_narrow_acc:expr, $non_narrow_tolerance_per_iter:expr, $pairwise:literal, $inputs_per_op:literal,) => {
+            use super::*;
+            use $crate::{
+                floats::test_utils::FloatLikeExt,
+                inputs::test_utils::f32_vec,
+                operations::test_utils::{
+                    self as operation_utils, f32_vec_and_num_subnormals,
+                },
+                proptest::prelude::*,
+            };
+
+            #[test]
+            fn metadata() {
+                operation_utils::test_operation_metadata::<$op>();
+            }
+
+            fn test_num_benchmark_operations<const ILP: usize>(
+                input_storage: impl InputsMut,
+            ) -> Result<(), TestCaseError> {
+                operation_utils::test_num_benchmark_operations::<$op, _, { ILP }>(
+                    input_storage,
+                    $pairwise,
+                    $inputs_per_op,
+                )
+            }
+
+            proptest! {
+                #[test]
+                fn num_benchmark_operations_mem_ilp1(mut mem in f32_vec($pairwise)) {
+                    test_num_benchmark_operations::<1>(&mut mem[..])?;
+                }
+
+                #[test]
+                fn num_benchmark_operations_mem_ilp2(mut mem in f32_vec($pairwise)) {
+                    test_num_benchmark_operations::<2>(&mut mem[..])?;
+                }
+
+                #[test]
+                fn num_benchmark_operations_mem_ilp3(mut mem in f32_vec($pairwise)) {
+                    test_num_benchmark_operations::<3>(&mut mem[..])?;
+                }
+            }
+
+            fn test_benchmark_run<Storage: InputsMut, const ILP: usize>(
+                input_storage: Storage,
+                num_subnormals: usize,
+            ) -> Result<(), TestCaseError> where Storage::Element: FloatLikeExt {
+                operation_utils::test_benchmark_run::<$op, _, { ILP }>(
+                    input_storage,
+                    $pairwise,
+                    num_subnormals,
+                    $needs_narrow_acc,
+                    $non_narrow_tolerance_per_iter,
+                )
+            }
+
+            proptest! {
+                #[test]
+                fn benchmark_run_mem_ilp1((mut mem, num_subnormals) in f32_vec_and_num_subnormals($pairwise)) {
+                    test_benchmark_run::<_, 1>(&mut mem[..], num_subnormals)?;
+                }
+
+                #[test]
+                fn benchmark_run_mem_ilp2((mut mem, num_subnormals) in f32_vec_and_num_subnormals($pairwise)) {
+                    test_benchmark_run::<_, 2>(&mut mem[..], num_subnormals)?;
+                }
+
+                #[test]
+                fn benchmark_run_mem_ilp3((mut mem, num_subnormals) in f32_vec_and_num_subnormals($pairwise)) {
+                    test_benchmark_run::<_, 3>(&mut mem[..], num_subnormals)?;
+                }
+            }
+        };
+    }
+
     /// Generate a array of f32s and a matching num_subnormals configuration
+    #[doc(hidden)]
     pub fn f32_array_and_num_nubnormals<const SIZE: usize>(
     ) -> impl Strategy<Value = ([f32; SIZE], usize)> {
         (f32_array(), num_subnormals(SIZE))
     }
 
     /// Generate a Vec of f32s and a matching num_subnormals configuration
-    pub fn f32_vec_and_num_subnormals() -> impl Strategy<Value = (Vec<f32>, usize)> {
-        f32_vec().prop_flat_map(|v| {
+    #[doc(hidden)]
+    pub fn f32_vec_and_num_subnormals(pairwise: bool) -> impl Strategy<Value = (Vec<f32>, usize)> {
+        f32_vec(pairwise).prop_flat_map(|v| {
             let v_len = v.len();
             (Just(v), num_subnormals(v_len))
         })
     }
 
     /// Check that operation metadata makes basic sense
+    #[doc(hidden)]
     pub fn test_operation_metadata<Op: Operation>() {
         assert!(!Op::NAME.is_empty());
         assert!(Op::AUX_REGISTERS_MEMOP < MIN_FLOAT_REGISTERS);
@@ -607,20 +793,24 @@ pub mod test_utils {
     }
 
     /// Instantiate a benchmark and check its advertised operation count
+    #[doc(hidden)]
     pub fn test_num_benchmark_operations<Op: Operation, Storage: InputsMut, const ILP: usize>(
         input_storage: Storage,
+        pairwise: bool,
         inputs_per_op: usize,
     ) -> Result<(), TestCaseError> {
         // Determine and check effective input length
         let accumulated_len = accumulated_len(&input_storage, ILP);
-        assert_eq!(
-            accumulated_len % inputs_per_op,
-            0,
-            "Invalid test input length"
-        );
 
-        // Instantiate benchmark
-        let benchmark = Op::make_benchmark::<_, ILP>(input_storage);
+        // Instantiate benchmark, checking for invalid input length
+        let input_len_granularity = 1 + (pairwise as usize);
+        let benchmark = if input_storage.as_ref().len() % input_len_granularity != 0 {
+            return assert_panics(AssertUnwindSafe(|| {
+                Op::make_benchmark::<_, ILP>(input_storage)
+            }));
+        } else {
+            Op::make_benchmark::<_, ILP>(input_storage)
+        };
 
         // Check that the number of operation matches expectations
         prop_assert_eq!(benchmark.num_operations(), accumulated_len / inputs_per_op);
@@ -628,11 +818,13 @@ pub mod test_utils {
     }
 
     /// Simulate a benchmark run
+    #[doc(hidden)]
     pub fn test_benchmark_run<Op: Operation, Storage: InputsMut, const ILP: usize>(
         input_storage: Storage,
+        pairwise: bool,
         num_subnormals: usize,
-        needs_narrow_accs_initially: bool,
-        needs_narrow_accs_before_first_input: impl Fn(Option<Storage::Element>) -> bool,
+        needs_narrow_acc: NeedsNarrowAcc,
+        non_narrow_tolerance_per_iter: f32,
     ) -> Result<(), TestCaseError>
     where
         Storage::Element: FloatLikeExt,
@@ -642,8 +834,16 @@ pub mod test_utils {
         let input_len = input_slice.len();
         let input_is_reused = Storage::KIND.is_reused();
 
-        // Set up a benchmark run
-        let mut benchmark = Op::make_benchmark::<_, ILP>(input_storage);
+        // Set up a benchmark...
+        let mut benchmark = if pairwise && input_len % 2 != 0 {
+            return assert_panics(AssertUnwindSafe(|| {
+                Op::make_benchmark::<_, ILP>(input_storage)
+            }));
+        } else {
+            Op::make_benchmark::<_, ILP>(input_storage)
+        };
+
+        // ...then specify the number of operations...
         let initial_num_ops = benchmark.num_operations();
         if num_subnormals > input_len {
             return assert_panics(AssertUnwindSafe(|| benchmark.setup_inputs(num_subnormals)));
@@ -651,6 +851,8 @@ pub mod test_utils {
             benchmark.setup_inputs(num_subnormals);
         }
         prop_assert_eq!(benchmark.num_operations(), initial_num_ops);
+
+        // ...and finally set up a benchmark run
         {
             let mut run = benchmark.start_run(&mut rand::thread_rng());
 
@@ -667,36 +869,79 @@ pub mod test_utils {
             }
             prop_assert_eq!(actual_subnormals, num_subnormals);
 
-            // Determine what is the first input that is going to be fed to each accumulator
-            let first_input_per_acc = if input_is_reused {
-                vec![initial_inputs.first().copied(); ILP]
+            // Determine if the first input that is going to be fed into each
+            // accumulator is normal.
+            let input_is_normal =
+                |idx: usize| initial_inputs.get(idx).is_some_and(|x| x.is_normal());
+            let mut first_input_normal = if input_is_reused {
+                [input_is_normal(0); ILP]
             } else {
-                initial_inputs
-                    .iter()
-                    .map(|input| Some(*input))
-                    .chain(std::iter::repeat(None))
-                    .take(ILP)
-                    .collect()
+                std::array::from_fn(input_is_normal)
             };
+            if pairwise {
+                debug_assert_eq!(input_len % 2, 0);
+                let first_right_input = input_len / 2;
+                if input_is_reused {
+                    first_input_normal = std::array::from_fn(|acc_idx| {
+                        first_input_normal[acc_idx] && input_is_normal(first_right_input)
+                    });
+                } else {
+                    first_input_normal = std::array::from_fn(|acc_idx| {
+                        first_input_normal[acc_idx] && input_is_normal(first_right_input + acc_idx)
+                    });
+                }
+            }
 
-            // Check initial accumulator values
+            // Check for initial accumulator values
             fn check_accs<R: BenchmarkRun>(
                 run: &R,
-                first_input_per_acc: &[Option<R::Float>],
-                needs_narrow_accs_before_first_input: impl Fn(Option<R::Float>) -> bool,
+                first_input_normal: &[bool],
+                needs_narrow_acc: NeedsNarrowAcc,
                 tolerance: f32,
+                error_context: impl Fn() -> String,
             ) -> Result<(), TestCaseError>
             where
                 R::Float: FloatLikeExt,
             {
-                for (acc, &first_input) in run.accumulators().iter().zip(first_input_per_acc) {
-                    if dbg!(needs_narrow_accs_before_first_input(dbg!(first_input))) {
+                debug_assert_eq!(first_input_normal.len(), run.accumulators().len());
+                for (acc_idx, (acc, &first_input_normal)) in run
+                    .accumulators()
+                    .iter()
+                    .zip(first_input_normal)
+                    .enumerate()
+                {
+                    let error_context = || {
+                        format!(
+                            "{}\n* Investigating accumulator #{acc_idx} ({acc:?})",
+                            error_context()
+                        )
+                    };
+                    let needs_narrow_acc = match needs_narrow_acc {
+                        NeedsNarrowAcc::Always => true,
+                        NeedsNarrowAcc::FirstNormal => first_input_normal,
+                        NeedsNarrowAcc::Never => false,
+                    };
+                    if needs_narrow_acc {
                         for scalar in acc.as_scalars() {
                             let scalar_from_f32 = |x: f32| {
                                 <<R::Float as FloatLikeExt>::Scalar as NumCast>::from(x).unwrap()
                             };
-                            prop_assert!(dbg!(*scalar) >= scalar_from_f32(0.5 - tolerance));
-                            prop_assert!(*scalar <= scalar_from_f32(2.0 + tolerance));
+                            let error = || {
+                                format!(
+                                    "{}\n* Accumulator value {scalar:?} escaped expected \"narrow\" range [1/2; 2] by more than tolerance {tolerance}",
+                                    error_context()
+                                )
+                            };
+                            prop_assert!(
+                                *scalar >= scalar_from_f32(0.5 - tolerance),
+                                "{}",
+                                error()
+                            );
+                            prop_assert!(
+                                *scalar <= scalar_from_f32(2.0 + tolerance),
+                                "{}",
+                                error()
+                            );
                         }
                     } else {
                         prop_assert!(acc.is_normal());
@@ -704,26 +949,56 @@ pub mod test_utils {
                 }
                 Ok(())
             }
+
+            // Start building an error report
+            let initial_accs = run.accumulators().to_owned();
+            let error_context = || format!("\n* Starting from accumulators ({initial_accs:?})");
+
+            // Before the first iteration, if the benchmark wants a narrow
+            // accumulator magnitude, the accumulator should have a narrow
+            // magnitude. The "FirstNormal" tolerance only applies after the
+            // inputs have been integrated into the accumulator.
+            let needs_narrow_initial_acc = match needs_narrow_acc {
+                NeedsNarrowAcc::Always | NeedsNarrowAcc::FirstNormal => NeedsNarrowAcc::Always,
+                NeedsNarrowAcc::Never => NeedsNarrowAcc::Never,
+            };
             check_accs(
                 &run,
-                &first_input_per_acc,
-                |_| needs_narrow_accs_initially,
+                &first_input_normal,
+                needs_narrow_initial_acc,
                 0.0,
+                error_context,
             )?;
 
             // Perform a number of benchmark iterations
-            for _ in 0..NUM_TEST_ITERATIONS {
+            let mut accumulator_values = Vec::new();
+            for i in 1..=NUM_TEST_ITERATIONS {
+                // Integrate the inputs
                 run.integrate_inputs();
-            }
 
-            // Check that run invariants are preserved over iterations
-            prop_assert_eq!(run.inputs(), &initial_inputs);
-            check_accs(
-                &run,
-                &first_input_per_acc,
-                needs_narrow_accs_before_first_input,
-                NON_NARROW_TOLERANCE * NUM_TEST_ITERATIONS as f32,
-            )?;
+                // Check that run invariants are preserved over iterations
+                prop_assert_eq!(run.inputs(), &initial_inputs);
+                check_accs(
+                    &run,
+                    &first_input_normal,
+                    needs_narrow_acc,
+                    non_narrow_tolerance_per_iter * i as f32,
+                    || {
+                        let mut result = format!(
+                            "{}\n* After {i} iteration(s) of integrating input(s) {initial_inputs:?}",
+                            error_context()
+                        );
+                        if !accumulator_values.is_empty() {
+                            result.push_str(", which got us through accumulator values...");
+                        }
+                        for acc in accumulator_values.iter() {
+                            result.push_str(&format!("\n  - {acc:?}"));
+                        }
+                        result
+                    },
+                )?;
+                accumulator_values.push(run.accumulators().to_owned());
+            }
         }
 
         // Check that benchmark invariants are preserved over iterations

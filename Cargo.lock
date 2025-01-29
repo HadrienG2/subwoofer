@@ -295,6 +295,7 @@ name = "fma_full_max"
 version = "1.0.0"
 dependencies = [
  "common",
+ "pessimize",
  "rand",
 ]
 

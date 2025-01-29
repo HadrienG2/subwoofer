@@ -30,6 +30,11 @@ impl Operation for FmaFullMax {
     fn make_benchmark<Storage: InputsMut, const ILP: usize>(
         input_storage: Storage,
     ) -> impl Benchmark<Float = Storage::Element> {
+        assert_eq!(
+            input_storage.as_ref().len() % 2,
+            0,
+            "Invalid test input length"
+        );
         FmaFullMaxBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -57,7 +62,20 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaFullMaxBenchmark<Sto
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        let accumulators = operations::narrow_accumulators(rng);
+        let accumulators = if Storage::KIND.is_reused() {
+            // Because the input data stream depends on the initial accumulator
+            // value, if all accumulators share the same input data stream, then
+            // all accumulators must have the same initial value.
+            //
+            // We must hide this fact from the compiler's optimizer, however,
+            // because otherwise it can over-optimize the computation by
+            // deleting all but one accumulator and copying the final results.
+            let narrow = floats::narrow_sampler();
+            let acc = narrow(rng);
+            std::array::from_fn(|_| pessimize::hide(acc))
+        } else {
+            operations::narrow_accumulators(rng)
+        };
         generate_input_pairs::<_, _, ILP>(
             &mut self.input_storage,
             rng,
@@ -104,7 +122,7 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaFullMaxRun<Storage, 
                 // belongs to, for the entire duration of the benchmark.
                 //
                 // See `FmaFullMaxState` below for a detailed description of the
-                // various states that the accumulator that end up in, and the
+                // various states that the accumulator can end up in, and the
                 // way it gets back to the `Narrow` state from there.
                 operations::hide_single_accumulator(acc.mul_add(elem1, elem2)).fast_max(lower_bound)
             },
@@ -298,11 +316,11 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                 }
             },
             ValueRole::Addend => match self.state {
-                normal @ (FmaFullMaxState::Narrow(_) | FmaFullMaxState::NarrowProduct { .. }) => {
-                    normal
-                }
+                normal @ (FmaFullMaxState::Narrow(_)
+                | FmaFullMaxState::NarrowProduct { .. }
+                | FmaFullMaxState::NarrowSum { .. }) => normal,
                 FmaFullMaxState::Subnormal => FmaFullMaxState::LowerBound,
-                FmaFullMaxState::NarrowSum { .. } | FmaFullMaxState::LowerBound => {
+                FmaFullMaxState::LowerBound => {
                     unreachable!("Previous multiplier should have taken us out of these states")
                 }
                 FmaFullMaxState::Invalid => {
@@ -341,19 +359,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                     // accumulator * factor * 1/factor ~ accumulator
                     (T::splat(1.0) / factor, FmaFullMaxState::Narrow(accumulator))
                 }
-                FmaFullMaxState::NarrowSum {
-                    accumulator,
-                    global_idx: _,
-                    addend,
-                } => {
-                    //   (accumulator + addend)
-                    // * accumulator / (accumulator + addend)
-                    // ~ accumulator
-                    (
-                        accumulator / (accumulator + addend),
-                        FmaFullMaxState::Narrow(accumulator),
-                    )
-                }
+                FmaFullMaxState::NarrowSum { .. } => (T::splat(1.0), self.state),
                 FmaFullMaxState::LowerBound => {
                     let recovery_multiplier = lower_recovery_multiplier(rng);
                     (
@@ -381,25 +387,21 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                             },
                         )
                     }
-                    FmaFullMaxState::NarrowProduct {
+                    FmaFullMaxState::NarrowProduct { .. } => (T::splat(0.0), self.state),
+                    FmaFullMaxState::NarrowSum {
                         accumulator,
                         global_idx: _,
-                        factor,
+                        addend,
                     } => {
-                        //   accumulator * factor
-                        // + accumulator * (1 - factor)
-                        // ~ accumulator
-                        (
-                            accumulator * (T::splat(1.0) - factor),
-                            FmaFullMaxState::Narrow(accumulator),
-                        )
+                        // accumulator + addend - addend = accumulator
+                        (-addend, FmaFullMaxState::Narrow(accumulator))
                     }
                     FmaFullMaxState::Subnormal => {
                         // ~0 + narrow ~ narrow
                         let narrow = narrow(rng);
                         (narrow, FmaFullMaxState::Narrow(narrow))
                     }
-                    FmaFullMaxState::NarrowSum { .. } | FmaFullMaxState::LowerBound => {
+                    FmaFullMaxState::LowerBound => {
                         unreachable!("Previous multiplier should have taken us out of these states")
                     }
                     FmaFullMaxState::Invalid => {
@@ -502,4 +504,11 @@ fn lower_recovery_multiplier<T: FloatLike>(rng: &mut impl Rng) -> T {
     // 1/4 * random(2..8) = random(1/2..2)
     assert_eq!(lower_bound::<T>(), T::splat(0.25));
     T::sampler(1..3)(rng)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::operations::test_utils::NeedsNarrowAcc;
+    common::test_pairwise_operation!(FmaFullMax, NeedsNarrowAcc::FirstNormal, 2);
 }

@@ -138,5 +138,6 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for SqrtPositiveMaxRun<I, ILP> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    common::test_unary_operation!(SqrtPositiveMax, 1, false, |_| false);
+    use common::operations::test_utils::NeedsNarrowAcc;
+    common::test_scalar_operation!(SqrtPositiveMax, NeedsNarrowAcc::Never);
 }

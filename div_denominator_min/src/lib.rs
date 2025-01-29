@@ -138,8 +138,11 @@ fn integrate<T: FloatLike>(acc: T, elem: T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::inputs::generators::{
-        muldiv::test_generate_muldiv_inputs, test_utils::target_and_num_subnormals,
+    use common::{
+        inputs::generators::{
+            muldiv::test_generate_muldiv_inputs, test_utils::target_and_num_subnormals,
+        },
+        operations::test_utils::NeedsNarrowAcc,
     };
     use proptest::prelude::*;
 
@@ -175,7 +178,5 @@ mod tests {
     }
 
     // Test the `Operation` implementation
-    common::test_unary_operation!(DivDenominatorMin, 1, true, |first_input| {
-        first_input.is_some_and(|x| x.is_normal())
-    });
+    common::test_scalar_operation!(DivDenominatorMin, NeedsNarrowAcc::FirstNormal);
 }

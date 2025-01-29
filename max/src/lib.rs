@@ -117,5 +117,6 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for MaxRun<I, ILP> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    common::test_unary_operation!(Max, 1, false, |_| false);
+    use common::operations::test_utils::NeedsNarrowAcc;
+    common::test_scalar_operation!(Max, NeedsNarrowAcc::Never);
 }

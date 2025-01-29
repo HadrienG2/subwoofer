@@ -1,6 +1,6 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
-    floats::{self, FloatLike},
+    floats::FloatLike,
     inputs::{
         generators::{generate_input_pairs, DataStream, GeneratorStream, InputGenerator},
         Inputs, InputsMut,
@@ -28,6 +28,11 @@ impl Operation for FmaAddend {
     fn make_benchmark<Storage: InputsMut, const ILP: usize>(
         input_storage: Storage,
     ) -> impl Benchmark<Float = Storage::Element> {
+        assert_eq!(
+            input_storage.as_ref().len() % 2,
+            0,
+            "Invalid test input length"
+        );
         FmaAddendBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -55,9 +60,22 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        let narrow = floats::narrow_sampler();
-        let multiplier = narrow(rng);
+        // This benchmark repeatedly multiplies the accumulator by a certain
+        // multiplier and its inverse in order to exercise the "multiplier" part
+        // of the FMA with normal values without getting an unbounded increase
+        // or decrease of accumulator magnitude across benchmark iterations.
+        //
+        // Unfortunately, for this to work, the inverse must be exact, and this
+        // only happens when the multiplier is a power of two. We'll avoid 1 as
+        // a multiplier since the hardware is too likely to over-optimize for it
+        // (fma(1, x, y) can be simplified into x + y), so if we want to only
+        // use numbers in the usual "narrow" [1/2; 2] range, this means that our
+        // only remaining choices are 1/2 and 2.
+        let multiplier = if rng.gen::<bool>() { 0.5 } else { 2.0 };
+        let multiplier = pessimize::hide(Storage::Element::splat(multiplier));
         let inv_multiplier = pessimize::hide(Storage::Element::splat(1.0) / multiplier);
+
+        // Generate input data
         generate_input_pairs::<_, _, ILP>(
             &mut self.input_storage,
             rng,
@@ -68,6 +86,8 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
                 inv_multiplier,
             },
         );
+
+        // Set up benchmark run
         FmaAddendRun {
             inputs: self.input_storage.freeze(),
             accumulators: operations::narrow_accumulators(rng),
@@ -255,6 +275,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
                 next_multiplier,
                 ..
             } => {
+                self.state = FmaAddendState::Unconstrained;
                 let mut inverse = -value;
                 if next_multiplier != self.next_multiplier {
                     let factor = match next_multiplier {
@@ -276,4 +297,11 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
             *stream.scalar_at(global_idx) = T::splat(0.0);
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::operations::test_utils::NeedsNarrowAcc;
+    common::test_pairwise_operation!(FmaAddend, NeedsNarrowAcc::Always, 1, 20.0 * f32::EPSILON);
 }

@@ -105,5 +105,6 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for AddRun<Storage, ILP> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    common::test_unary_operation!(Add, 1, true, |_| true);
+    use common::operations::test_utils::NeedsNarrowAcc;
+    common::test_scalar_operation!(Add, NeedsNarrowAcc::Always);
 }
