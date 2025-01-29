@@ -8,7 +8,6 @@ use common::{
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
-use std::cell::RefCell;
 
 /// FMA with possibly subnormal inputs, followed by MAX
 #[derive(Clone, Copy)]
@@ -62,26 +61,13 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaFullMaxBenchmark<Sto
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        let accumulators = if Storage::KIND.is_reused() {
-            // Because the input data stream depends on the initial accumulator
-            // value, if all accumulators share the same input data stream, then
-            // all accumulators must have the same initial value.
-            //
-            // We must hide this fact from the compiler's optimizer, however,
-            // because otherwise it can over-optimize the computation by
-            // deleting all but one accumulator and copying the final results.
-            let narrow = floats::narrow_sampler();
-            let acc = narrow(rng);
-            std::array::from_fn(|_| pessimize::hide(acc))
-        } else {
-            operations::narrow_accumulators(rng)
-        };
+        let accumulators = operations::narrow_accumulators(rng);
         generate_input_pairs::<_, _, ILP>(
             &mut self.input_storage,
             rng,
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
-            FmaFullMaxGenerator(RefCell::new(accumulators.into_iter())),
+            FmaFullMaxGenerator,
         );
         FmaFullMaxRun {
             inputs: self.input_storage.freeze(),
@@ -141,31 +127,18 @@ fn lower_bound<T: FloatLike>() -> T {
 }
 
 /// Global state of the input generator
-///
-/// Will produce one valid data stream per initial accumulator value. Subsequent
-/// data streams are invalid and only suitable for use as placeholder values,
-/// they should not be manipulated.
-struct FmaFullMaxGenerator<AccIter: Iterator>(RefCell<AccIter>)
-where
-    AccIter::Item: FloatLike;
+struct FmaFullMaxGenerator;
 //
-impl<AccIter: Iterator, R: Rng> InputGenerator<AccIter::Item, R> for FmaFullMaxGenerator<AccIter>
-where
-    AccIter::Item: FloatLike,
-{
+impl<F: FloatLike, R: Rng> InputGenerator<F, R> for FmaFullMaxGenerator {
     type Stream<'a>
-        = FmaFullMaxStream<AccIter::Item>
+        = FmaFullMaxStream<F>
     where
         Self: 'a;
 
     fn new_stream(&self) -> Self::Stream<'_> {
         FmaFullMaxStream {
             next_role: ValueRole::Multiplier,
-            state: self
-                .0
-                .borrow_mut()
-                .next()
-                .map_or(FmaFullMaxState::Invalid, FmaFullMaxState::Narrow),
+            state: FmaFullMaxState::Narrow,
         }
     }
 }
@@ -201,7 +174,7 @@ enum FmaFullMaxState<T: FloatLike> {
     /// Accumulator is a normal number in range `[1/2; 2[`
     ///
     /// This is the initial state of the accumulator. Every multiplier or addend
-    /// in the normal range strives to bring to bring the accumulator back to
+    /// in the normal range strives to bring the accumulator back to
     /// this range whenever it deviates from it.
     ///
     /// Possible state transitions:
@@ -209,11 +182,11 @@ enum FmaFullMaxState<T: FloatLike> {
     /// - If the FMA starts from this state...
     ///   * Multiplying by a normal number leads to the `NarrowProduct` state
     ///   * Multiplying by a subnormal number leads to the `Subnormal` state
-    /// - If this state is reached by multiplying a non-`Narrow` accumulator by
-    ///   a normal multiplier...
+    /// - If this state is reached by multiplying a `NarrowProduct` accumulator
+    ///   by a normal multiplier...
     ///   * Adding a normal number leads to the `NarrowSum` state
     ///   * Adding a subnormal number preserves the `Narrow` state
-    Narrow(T),
+    Narrow,
 
     /// Accumulator is the product of two normal numbers in range `[1/2; 2[`,
     /// which is in range `[1/4; 4[`
@@ -222,15 +195,13 @@ enum FmaFullMaxState<T: FloatLike> {
     /// input. After this, the following state transitions can occur:
     ///
     /// - If this state is reached by multiplying a `Narrow` accumulator...
-    ///   * Adding a normal number leads back to the `Narrow` state
-    ///   * Adding a subnormal number preserves the `NarrowProduct` state
+    ///   * Normal addends are forced to be 0.0 for precision reasons, which
+    ///     preserves the `NarrowProduct` state.
+    ///   * Adding a subnormal number also preserves the `NarrowProduct` state
     /// - If the FMA starts from this state...
     ///   * Multiplying by a normal number leads to the `Narrow` state
     ///   * Multiplying by a subnormal number leads to the `Subnormal` state
     NarrowProduct {
-        /// Accumulator value before the product
-        accumulator: T,
-
         /// Position of the factor in the input data stream
         global_idx: usize,
 
@@ -245,16 +216,12 @@ enum FmaFullMaxState<T: FloatLike> {
     /// multiplier, then adding a normal number. After this, the following state
     /// transitions can occur:
     ///
-    /// - Multiplying by a normal number leads back to the `Narrow` state
+    /// - Normal multipliers are forced to be 1.0 for precision reasons, which
+    ///   preserves the `NarrowSum` state. After this...
+    ///     * A normal addend takes us back to the `Narrow` state
+    ///     * A subnormal addend preserves the `NarrowSum` state
     /// - Multiplying by a subnormal number leads to the `Subnormal` state
-    ///
-    /// This state can only be reached via addition, and all multiplicative
-    /// state transitions lead away from it, therefore there is no situation in
-    /// which we will add a number to such an accumulator.
     NarrowSum {
-        /// Accumulator value before the sum
-        accumulator: T,
-
         /// Position of the addend in the input data stream
         global_idx: usize,
 
@@ -292,9 +259,6 @@ enum FmaFullMaxState<T: FloatLike> {
     /// state transitions lead away from it, therefore there is no situation in
     /// which we will add a number to such an accumulator.
     LowerBound,
-
-    /// This state should never encountered by a valid data stream
-    Invalid,
 }
 //
 impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
@@ -304,27 +268,21 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
     fn record_subnormal(&mut self) {
         self.state = match self.next_role {
             ValueRole::Multiplier => match self.state {
-                FmaFullMaxState::Narrow(_)
+                FmaFullMaxState::Narrow
                 | FmaFullMaxState::NarrowProduct { .. }
                 | FmaFullMaxState::NarrowSum { .. }
                 | FmaFullMaxState::LowerBound => FmaFullMaxState::Subnormal,
                 FmaFullMaxState::Subnormal => {
                     unreachable!("Previous MAX should have taken us out of this state")
                 }
-                FmaFullMaxState::Invalid => {
-                    unreachable!("Attempted to use an invalid input data stream")
-                }
             },
             ValueRole::Addend => match self.state {
-                normal @ (FmaFullMaxState::Narrow(_)
+                normal @ (FmaFullMaxState::Narrow
                 | FmaFullMaxState::NarrowProduct { .. }
                 | FmaFullMaxState::NarrowSum { .. }) => normal,
                 FmaFullMaxState::Subnormal => FmaFullMaxState::LowerBound,
                 FmaFullMaxState::LowerBound => {
                     unreachable!("Previous multiplier should have taken us out of these states")
-                }
-                FmaFullMaxState::Invalid => {
-                    unreachable!("Attempted to use an invalid input data stream")
                 }
             },
         };
@@ -340,72 +298,50 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
     ) -> T {
         let (value, next_state) = match self.next_role {
             ValueRole::Multiplier => match self.state {
-                FmaFullMaxState::Narrow(accumulator) => {
+                FmaFullMaxState::Narrow => {
                     let factor = narrow(rng);
                     (
                         factor,
-                        FmaFullMaxState::NarrowProduct {
-                            accumulator,
-                            global_idx,
-                            factor,
-                        },
+                        FmaFullMaxState::NarrowProduct { global_idx, factor },
                     )
                 }
                 FmaFullMaxState::NarrowProduct {
-                    accumulator,
                     global_idx: _,
                     factor,
                 } => {
                     // accumulator * factor * 1/factor ~ accumulator
-                    (T::splat(1.0) / factor, FmaFullMaxState::Narrow(accumulator))
+                    (T::splat(1.0) / factor, FmaFullMaxState::Narrow)
                 }
                 FmaFullMaxState::NarrowSum { .. } => (T::splat(1.0), self.state),
                 FmaFullMaxState::LowerBound => {
                     let recovery_multiplier = lower_recovery_multiplier(rng);
-                    (
-                        recovery_multiplier,
-                        FmaFullMaxState::Narrow(recovery_multiplier * lower_bound::<T>()),
-                    )
+                    (recovery_multiplier, FmaFullMaxState::Narrow)
                 }
                 FmaFullMaxState::Subnormal => {
                     unreachable!("Previous MAX should have taken us out of this state")
                 }
-                FmaFullMaxState::Invalid => {
-                    unreachable!("Attempted to use an invalid input data stream")
-                }
             },
             ValueRole::Addend => {
                 match self.state {
-                    FmaFullMaxState::Narrow(accumulator) => {
+                    FmaFullMaxState::Narrow => {
                         let addend = narrow(rng);
-                        (
-                            addend,
-                            FmaFullMaxState::NarrowSum {
-                                accumulator,
-                                global_idx,
-                                addend,
-                            },
-                        )
+                        (addend, FmaFullMaxState::NarrowSum { global_idx, addend })
                     }
                     FmaFullMaxState::NarrowProduct { .. } => (T::splat(0.0), self.state),
                     FmaFullMaxState::NarrowSum {
-                        accumulator,
                         global_idx: _,
                         addend,
                     } => {
                         // accumulator + addend - addend = accumulator
-                        (-addend, FmaFullMaxState::Narrow(accumulator))
+                        (-addend, FmaFullMaxState::Narrow)
                     }
                     FmaFullMaxState::Subnormal => {
                         // ~0 + narrow ~ narrow
                         let narrow = narrow(rng);
-                        (narrow, FmaFullMaxState::Narrow(narrow))
+                        (narrow, FmaFullMaxState::Narrow)
                     }
                     FmaFullMaxState::LowerBound => {
                         unreachable!("Previous multiplier should have taken us out of these states")
-                    }
-                    FmaFullMaxState::Invalid => {
-                        unreachable!("Attempted to use an invalid input data stream")
                     }
                 }
             }
@@ -418,7 +354,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
     fn finalize(self, mut stream: DataStream<'_, T>, rng: &mut R) {
         assert_eq!(self.next_role, ValueRole::Multiplier);
         match self.state {
-            FmaFullMaxState::Narrow(_) => {}
+            FmaFullMaxState::Narrow => {}
             FmaFullMaxState::NarrowProduct { global_idx, .. } => {
                 // This accumulator change cannot be compensated by a subsequent
                 // input, so make sure the previous product does not actually
@@ -490,9 +426,6 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
             }
             FmaFullMaxState::Subnormal => {
                 unreachable!("Previous MAX should have taken us out of this state")
-            }
-            FmaFullMaxState::Invalid => {
-                unreachable!("Attempted to use an invalid input data stream")
             }
         }
     }
