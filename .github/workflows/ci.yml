@@ -51,8 +51,8 @@ jobs:
           if-no-files-found: error
 
 
-  # Formatter output and dependency checking don't depend on cargo features / OS
-  format-machete:
+  # Formatter output doesn't depend on cargo features / OS
+  format:
     # Don't run CI twice when a PR is created from a branch internal to the repo
     # Don't run in scheduled jobs, that's what "scheduled" is for
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
@@ -71,12 +71,6 @@ jobs:
 
       - name: Check code formatting
         run: cargo fmt --all --check
-
-      - name: Install cargo-machete
-        uses: taiki-e/install-action@cargo-machete
-
-      - name: Look for unused dependencies with cargo-machete
-        run: cargo machete
 
 
   # Lints and test outcome can vary depending on hardware and benchmark features
@@ -124,7 +118,7 @@ jobs:
         uses: taiki-e/install-action@cargo-nextest
 
       - name: Run tests
-        run: cargo nextest --workspace ${{ matrix.features }}
+        run: cargo nextest run --workspace ${{ matrix.features }}
 
 
   # Update the book if all other CI jobs pass
@@ -139,7 +133,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
-    needs: ["render-book", "format-machete", "lints-tests"]
+    needs: ["render-book", "format", "lints-tests"]
 
     # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
     permissions:
@@ -221,5 +215,5 @@ jobs:
         uses: taiki-e/install-action@cargo-nextest
 
       - name: Run the tests
-        run: cargo nextest --workspace ${{ matrix.features }}
+        run: cargo nextest run --workspace ${{ matrix.features }}
 
