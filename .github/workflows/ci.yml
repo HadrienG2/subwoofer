@@ -78,10 +78,7 @@ jobs:
           crate: cargo-machete
 
       - name: Look for unused dependencies with cargo-machete
-        run: |
-          # FIXME: --force used as a workaround for https://github.com/Swatinem/rust-cache/issues/204
-          cargo binstall -y --force cargo-machete
-          cargo machete
+        run: cargo machete
 
 
   # Lints and test outcome can vary depending on hardware and benchmark features
