@@ -73,9 +73,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Install cargo-machete
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: cargo-machete
+        uses: taiki-e/install-action@cargo-machete
 
       - name: Look for unused dependencies with cargo-machete
         run: cargo machete
@@ -123,9 +121,7 @@ jobs:
         run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
 
       - name: Install cargo-nextest
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: cargo-nextest
+        uses: taiki-e/install-action@cargo-nextest
 
       - name: Run tests
         run: cargo nextest --workspace ${{ matrix.features }}
@@ -222,9 +218,7 @@ jobs:
         run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
 
       - name: Install cargo-nextest
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: cargo-nextest
+        uses: taiki-e/install-action@cargo-nextest
 
       - name: Run the tests
         run: cargo nextest --workspace ${{ matrix.features }}
