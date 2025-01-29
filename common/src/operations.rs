@@ -951,7 +951,13 @@ pub mod test_utils {
             }
 
             // Start building an error report
-            let initial_accs = run.accumulators().to_owned();
+            prop_assert_eq!(run.accumulators().len(), ILP);
+            fn clone_accs<R: BenchmarkRun, const ILP: usize>(run: &R) -> [R::Float; ILP] {
+                let accumulators = run.accumulators();
+                debug_assert_eq!(accumulators.len(), ILP);
+                std::array::from_fn(|idx| accumulators[idx])
+            }
+            let initial_accs = clone_accs::<_, ILP>(&run);
             let error_context = || format!("\n* Starting from accumulators ({initial_accs:?})");
 
             // Before the first iteration, if the benchmark wants a narrow
@@ -997,7 +1003,7 @@ pub mod test_utils {
                         result
                     },
                 )?;
-                accumulator_values.push(run.accumulators().to_owned());
+                accumulator_values.push(clone_accs::<_, ILP>(&run));
             }
         }
 
