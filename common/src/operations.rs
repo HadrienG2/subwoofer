@@ -1,7 +1,7 @@
 //! Benchmark inner loops and associated types
 
 use crate::{
-    floats::{self, FloatLike},
+    floats::{self, suggested_extremal_bias, FloatLike},
     inputs::{Inputs, InputsMut},
 };
 use rand::prelude::*;
@@ -90,9 +90,14 @@ pub trait Benchmark {
     /// from that of this benchmark through
     /// [`clone_or_reborrow()`](InputStorage::clone_or_reborrow).
     ///
+    /// Finally, `inside_test` should be set if and only if the benchmark is run
+    /// in the context of a unit test. This increases the odds that extremal
+    /// inputs and accumulator values are generated, which increases the odds of
+    /// uncovering problems.
+    ///
     /// Implementations should be marked `#[inline]` to give the compiler a more
     /// complete picture of the accumulator data flow.
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_>;
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_>;
 
     /// State of an ongoing execution of this benchmark
     type Run<'run>: BenchmarkRun<Float = Self::Float>
@@ -166,15 +171,21 @@ pub fn accumulated_len<I: Inputs>(inputs: &I, ilp: usize) -> usize {
 
 /// Initialize accumulators with a random positive value in range [0.5; 2[
 #[inline]
-pub fn narrow_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
-    let narrow = floats::narrow_sampler();
+pub fn narrow_accumulators<T: FloatLike, const ILP: usize>(
+    rng: &mut impl Rng,
+    inside_test: bool,
+) -> [T; ILP] {
+    let narrow = floats::narrow_sampler(suggested_extremal_bias(inside_test, ILP));
     std::array::from_fn::<_, ILP, _>(|_| narrow(rng))
 }
 
 /// Initialize accumulators with a random normal positive value
 #[inline]
-pub fn normal_accumulators<T: FloatLike, const ILP: usize>(rng: &mut impl Rng) -> [T; ILP] {
-    let normal = floats::normal_sampler();
+pub fn normal_accumulators<T: FloatLike, const ILP: usize>(
+    rng: &mut impl Rng,
+    inside_test: bool,
+) -> [T; ILP] {
+    let normal = floats::normal_sampler(suggested_extremal_bias(inside_test, ILP));
     std::array::from_fn::<_, ILP, _>(|_| normal(rng))
 }
 
@@ -854,7 +865,7 @@ pub mod test_utils {
 
         // ...and finally set up a benchmark run
         {
-            let mut run = benchmark.start_run(&mut rand::thread_rng());
+            let mut run = benchmark.start_run(&mut rand::thread_rng(), true);
 
             // Check generated input values
             let mut actual_subnormals = 0;

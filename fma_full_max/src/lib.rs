@@ -1,6 +1,6 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
-    floats::{self, FloatLike},
+    floats::{self, suggested_extremal_bias, FloatLike},
     inputs::{
         generators::{generate_input_pairs, DataStream, GeneratorStream, InputGenerator},
         Inputs, InputsMut,
@@ -60,18 +60,18 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaFullMaxBenchmark<Sto
     }
 
     #[inline]
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        let accumulators = operations::narrow_accumulators(rng);
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
         generate_input_pairs::<_, _, ILP>(
-            &mut self.input_storage,
-            rng,
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
-            FmaFullMaxGenerator,
+            &mut self.input_storage,
+            rng,
+            inside_test,
+            FmaFullMaxGenerator { inside_test },
         );
         FmaFullMaxRun {
             inputs: self.input_storage.freeze(),
-            accumulators,
+            accumulators: operations::narrow_accumulators(rng, inside_test),
         }
     }
 
@@ -127,7 +127,10 @@ fn lower_bound<T: FloatLike>() -> T {
 }
 
 /// Global state of the input generator
-struct FmaFullMaxGenerator;
+struct FmaFullMaxGenerator {
+    /// Truth that we are generating data for a unit test
+    inside_test: bool,
+}
 //
 impl<F: FloatLike, R: Rng> InputGenerator<F, R> for FmaFullMaxGenerator {
     type Stream<'a>
@@ -137,6 +140,7 @@ impl<F: FloatLike, R: Rng> InputGenerator<F, R> for FmaFullMaxGenerator {
 
     fn new_stream(&self) -> Self::Stream<'_> {
         FmaFullMaxStream {
+            inside_test: self.inside_test,
             next_role: ValueRole::Multiplier,
             state: FmaFullMaxState::Narrow,
         }
@@ -145,6 +149,9 @@ impl<F: FloatLike, R: Rng> InputGenerator<F, R> for FmaFullMaxGenerator {
 
 /// Per-stream state of the input generator
 struct FmaFullMaxStream<T: FloatLike> {
+    /// Truth that we are generating data for a unit test
+    inside_test: bool,
+
     /// Role of the next number that this stream is going to emit
     next_role: ValueRole,
 
@@ -314,7 +321,7 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                 }
                 FmaFullMaxState::NarrowSum { .. } => (T::splat(1.0), self.state),
                 FmaFullMaxState::LowerBound => {
-                    let recovery_multiplier = lower_recovery_multiplier(rng);
+                    let recovery_multiplier = lower_recovery_multiplier(rng, self.inside_test);
                     (recovery_multiplier, FmaFullMaxState::Narrow)
                 }
                 FmaFullMaxState::Subnormal => {
@@ -410,13 +417,14 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
                 // [1/2; 2[ magnitude range that it started from.
                 match (last_multiplier.is_normal(), last_addend.is_normal()) {
                     (true, true) | (true, false) => {
-                        *last_multiplier = lower_recovery_multiplier(rng);
+                        *last_multiplier = lower_recovery_multiplier(rng, self.inside_test);
                         if last_addend.is_normal() {
                             *last_addend = T::splat(0.0);
                         }
                     }
                     (false, true) => {
-                        let narrow = floats::narrow_sampler();
+                        let narrow =
+                            floats::narrow_sampler(suggested_extremal_bias(self.inside_test, 1));
                         *last_addend = narrow(rng);
                     }
                     (false, false) => unreachable!(
@@ -433,10 +441,10 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaFullMaxStream<T> {
 
 /// Generate a multiplier that recovers an accumulator from a subnormal value
 /// (which takes it to its lower bound) back to narrow magnitude range [1/2; 2[
-fn lower_recovery_multiplier<T: FloatLike>(rng: &mut impl Rng) -> T {
+fn lower_recovery_multiplier<T: FloatLike>(rng: &mut impl Rng, inside_test: bool) -> T {
     // 1/4 * random(2..8) = random(1/2..2)
     assert_eq!(lower_bound::<T>(), T::splat(0.25));
-    T::sampler(1..3)(rng)
+    T::sampler(1..3, suggested_extremal_bias(inside_test, 1))(rng)
 }
 
 #[cfg(test)]

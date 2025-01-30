@@ -20,11 +20,18 @@ use rand::prelude::*;
 /// - In case the number of normal inputs is odd, we cannot do this with the
 ///   last input, so we set it to `0` instead
 pub fn generate_add_inputs<Storage: InputsMut, const ILP: usize>(
+    num_subnormals: usize,
     target: &mut Storage,
     rng: &mut impl Rng,
-    num_subnormals: usize,
+    inside_test: bool,
 ) {
-    super::generate_input_streams::<_, _, ILP>(target, rng, num_subnormals, AddGenerator);
+    super::generate_input_streams::<_, _, ILP>(
+        num_subnormals,
+        target,
+        rng,
+        inside_test,
+        AddGenerator,
+    );
 }
 
 /// (Lack of) global state for this input generator
@@ -91,10 +98,11 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for AddStream<T> {
 mod tests {
     use super::*;
     use crate::{
-        floats,
+        floats::{self, test_utils::suggested_extremal_bias},
         inputs::generators::{
             test_utils::target_and_num_subnormals, tests::stream_target_subnormals,
         },
+        operations,
         tests::assert_panics,
     };
     use core::f32;
@@ -107,8 +115,13 @@ mod tests {
         fn add_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals()) {
             // Set up a mock environment
             let rng = &mut rand::thread_rng();
-            let mut narrow = floats::narrow_sampler();
-            let subnormal = floats::subnormal_sampler();
+            let [num_narrow, num_subnormal] = subnormals.iter().fold([0, 0], |[num_narrow, num_subnormals], &is_subnormal| {
+                let new_subnormal = is_subnormal as usize;
+                let new_normal = !is_subnormal as usize;
+                [num_narrow + new_normal, num_subnormals + new_subnormal]
+            });
+            let mut narrow = floats::narrow_sampler(suggested_extremal_bias(num_narrow));
+            let subnormal = floats::subnormal_sampler(suggested_extremal_bias(num_subnormal));
 
             // Simulate the creation of a data stream, checking behavior
             let mut stream = AddStream::Unconstrained;
@@ -170,7 +183,7 @@ mod tests {
         // Generate the inputs
         let mut rng = rand::thread_rng();
         let generate = |mut target: &mut [f32], rng: &mut _| {
-            generate_add_inputs::<_, ILP>(&mut target, rng, num_subnormals)
+            generate_add_inputs::<_, ILP>(num_subnormals, &mut target, rng, true)
         };
         if num_subnormals > target.len() {
             return assert_panics(AssertUnwindSafe(|| {
@@ -180,8 +193,7 @@ mod tests {
         generate(target, &mut rng);
 
         // Set up narrow accumulators
-        let narrow = floats::narrow_sampler();
-        let accs_init: [f32; ILP] = std::array::from_fn(|_| narrow(&mut rng));
+        let accs_init = operations::narrow_accumulators::<f32, ILP>(&mut rng, true);
 
         // Check the result and simulate its effect on narrow accumulators
         let mut actual_subnormals = 0;

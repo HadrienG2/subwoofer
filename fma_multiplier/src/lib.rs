@@ -1,6 +1,6 @@
 use common::{
     arch::{HAS_HARDWARE_NEGATED_FMA, HAS_MEMORY_OPERANDS},
-    floats::{self, FloatLike},
+    floats::{self, suggested_extremal_bias, FloatLike},
     inputs::{generators::add::generate_add_inputs, Inputs, InputsMut},
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
@@ -54,18 +54,19 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaMultiplierBenchmark<
     }
 
     #[inline]
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
         generate_add_inputs::<_, ILP>(
-            &mut self.input_storage,
-            rng,
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
+            &mut self.input_storage,
+            rng,
+            inside_test,
         );
-        let narrow = floats::narrow_sampler();
+        let multiplier_sampler = floats::narrow_sampler(suggested_extremal_bias(inside_test, 1));
         FmaMultiplierRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::narrow_accumulators(rng),
-            multiplier: narrow(rng),
+            accumulators: operations::narrow_accumulators(rng, inside_test),
+            multiplier: multiplier_sampler(rng),
         }
     }
 
@@ -116,5 +117,5 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaMultiplierRun<Storag
 mod tests {
     use super::*;
     use common::operations::test_utils::NeedsNarrowAcc;
-    common::test_scalar_operation!(FmaMultiplier, NeedsNarrowAcc::Always, 30.0 * f32::EPSILON);
+    common::test_scalar_operation!(FmaMultiplier, NeedsNarrowAcc::Always, 50.0 * f32::EPSILON);
 }

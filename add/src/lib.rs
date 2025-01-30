@@ -48,16 +48,17 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for AddBenchmark<Storage, I
     }
 
     #[inline]
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
         generate_add_inputs::<_, ILP>(
-            &mut self.input_storage,
-            rng,
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
+            &mut self.input_storage,
+            rng,
+            inside_test,
         );
         AddRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::narrow_accumulators(rng),
+            accumulators: operations::narrow_accumulators(rng, inside_test),
         }
     }
 
@@ -106,5 +107,5 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for AddRun<Storage, ILP> {
 mod tests {
     use super::*;
     use common::operations::test_utils::NeedsNarrowAcc;
-    common::test_scalar_operation!(Add, NeedsNarrowAcc::Always);
+    common::test_scalar_operation!(Add, NeedsNarrowAcc::Always, 20.0 * f32::EPSILON);
 }

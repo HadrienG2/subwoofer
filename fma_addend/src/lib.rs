@@ -59,7 +59,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
     }
 
     #[inline]
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
         // This benchmark repeatedly multiplies the accumulator by a certain
         // multiplier and its inverse in order to exercise the "multiplier" part
         // of the FMA with normal values without getting an unbounded increase
@@ -77,10 +77,11 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
 
         // Generate input data
         generate_input_pairs::<_, _, ILP>(
-            &mut self.input_storage,
-            rng,
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
+            &mut self.input_storage,
+            rng,
+            inside_test,
             FmaAddendGenerator {
                 multiplier,
                 inv_multiplier,
@@ -90,7 +91,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
         // Set up benchmark run
         FmaAddendRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::narrow_accumulators(rng),
+            accumulators: operations::narrow_accumulators(rng, inside_test),
             multiplier,
             inv_multiplier,
         }

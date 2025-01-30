@@ -63,6 +63,16 @@ opt-level = 2
 # May slightly improve build and runtime perf
 panic = "abort"
 
+# Scale to more PROPTEST_CASES at the expense of slightly slower test builds
+[profile.test]
+opt-level = 1
+#
+[profile.test.package.proptest]
+opt-level = 3
+#
+[profile.test.package.rand_chacha]
+opt-level = 3
+
 # ...and everything below this point is about the "subwoofer" root crate
 
 [package]

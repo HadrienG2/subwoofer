@@ -61,16 +61,17 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for MaxBenchmark<Storage, I
     }
 
     #[inline]
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
         generate_max_inputs(
-            self.input_storage.as_mut(),
-            rng,
             self.num_subnormals
                 .expect("setup_inputs should have been called first"),
+            self.input_storage.as_mut(),
+            rng,
+            inside_test,
         );
         MaxRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::normal_accumulators(rng),
+            accumulators: operations::normal_accumulators(rng, inside_test),
         }
     }
 

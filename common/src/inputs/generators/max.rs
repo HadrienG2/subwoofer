@@ -1,6 +1,6 @@
 //! Input generator for `acc <- max(acc, f(input))` benchmarks
 
-use crate::floats::{self, FloatLike};
+use crate::floats::{self, suggested_extremal_bias, FloatLike};
 use rand::prelude::*;
 
 /// Generate a mixture of normal and subnormal inputs for a benchmark that
@@ -12,9 +12,10 @@ use rand::prelude::*;
 /// without any risk of overflow or cancelation. Hence they get the simplest and
 /// most general input generation procedure.
 pub fn generate_max_inputs<T: FloatLike, R: Rng>(
+    num_subnormals: usize,
     target: &mut [T],
     rng: &mut R,
-    num_subnormals: usize,
+    inside_test: bool,
 ) {
     // Split the target slice into one part for normal numbers and another part
     // for subnormal numbers
@@ -22,13 +23,14 @@ pub fn generate_max_inputs<T: FloatLike, R: Rng>(
     let (subnormals, normals) = target.split_at_mut(num_subnormals);
 
     // Generate the subnormal inputs
-    let subnormal = floats::subnormal_sampler();
+    let subnormal =
+        floats::subnormal_sampler(suggested_extremal_bias(inside_test, subnormals.len()));
     for elem in subnormals {
         *elem = subnormal(rng);
     }
 
     // Generate the normal inputs
-    let normal = floats::normal_sampler();
+    let normal = floats::normal_sampler(suggested_extremal_bias(inside_test, normals.len()));
     for elem in normals {
         *elem = normal(rng);
     }
@@ -55,7 +57,7 @@ mod tests {
         #[test]
         fn generate_max_inputs((mut target, num_subnormals) in target_and_num_subnormals()) {
             // Handle invalid subnormals count and generate benchmark inputs
-            let generate = |target: &mut [_]| super::generate_max_inputs(target, &mut rand::thread_rng(), num_subnormals);
+            let generate = |target: &mut [_]| super::generate_max_inputs(num_subnormals, target, &mut rand::thread_rng(), true);
             if num_subnormals > target.len() {
                 return assert_panics(AssertUnwindSafe(|| {
                     generate(&mut target);

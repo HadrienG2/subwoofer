@@ -3,7 +3,7 @@
 use pessimize::Pessimize;
 use rand::prelude::*;
 #[cfg(feature = "simd")]
-use std::simd::{cmp::SimdPartialOrd, LaneCount, Simd, StdFloat, SupportedLaneCount};
+use std::simd::{prelude::*, LaneCount, StdFloat, SupportedLaneCount};
 use std::{
     fmt::Debug,
     num::NonZeroUsize,
@@ -45,9 +45,19 @@ pub trait FloatLike:
     ///
     /// For SIMD types, we generate a vector of such floats.
     ///
-    /// This should be `#[inline]` because the resulting RNG is critical to
-    /// benchmark performance when generating large input datasets.
-    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self;
+    /// `extremal_bias` is a unit testing feature which artificially inflates
+    /// the probability of generating the lowest and highest numbers in the
+    /// specified range. It takes a probability in range [0; 1] as a parameter,
+    /// and the returned sampler will ensure that the probability of getting
+    /// extreme values in the sampler's output is at least this probability (the
+    /// actual probability may be slightly higher).
+    ///
+    /// For SIMD types, `extremal_bias` commands the probability of getting a
+    /// full vector of extremal values vs a full vector of non-random values.
+    ///
+    /// Implementations should be `#[inline]` because the resulting RNG is
+    /// critical to benchmark performance when generating large input datasets.
+    fn sampler<R: Rng>(exp_range: Range<i32>, extremal_bias: f32) -> impl Fn(&mut R) -> Self;
 
     /// Range of exponents that corresponds to finite (non-NaN/non-inf) numbers
     const FINITE_EXPS: Range<i32>;
@@ -95,6 +105,8 @@ pub trait FloatLike:
     // We're also gonna need some float data & ops not exposed via std traits
     fn is_normal(self) -> bool;
     fn is_subnormal(self) -> bool;
+    fn is_subnormal_or_zero(self) -> bool;
+    fn min_subnormal() -> Self;
     //
     // Implementations of all of these functions must be marked `#[inline]` as
     // they will be called within the timed benchmark loop.
@@ -105,11 +117,14 @@ pub trait FloatLike:
 //
 impl FloatLike for f32 {
     #[inline]
-    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+    fn sampler<R: Rng>(exp_range: Range<i32>, extremal_bias: f32) -> impl Fn(&mut R) -> Self {
         // Check that the specified exponent range is valid
         assert!(exp_range.start >= Self::FINITE_EXPS.start);
         assert!(exp_range.start < exp_range.end);
         assert!(exp_range.end <= Self::FINITE_EXPS.end + 1);
+        // Check that extremal_bias is a probability
+        assert!(extremal_bias >= 0.0);
+        assert!(extremal_bias <= 1.0);
         // From the binary32 wikipedia page
         // https://en.wikipedia.org/wiki/Single-precision_floating-point_format
         // we gather that an f32 has 23 low-order fraction bits.
@@ -118,15 +133,44 @@ impl FloatLike for f32 {
         // Then we translate our exponent range into an exponent bits range...
         let exp_to_bits = |exp| ((exp - Self::FINITE_EXPS.start) as u32) << fraction_bits;
         let exp_bits_range = exp_to_bits(exp_range.start)..exp_to_bits(exp_range.end);
+        // ...and finally we discretize extremal_bias into a lower-resolution
+        // integer fraction, so that we can use the same random bits to...
+        // - Determine if we should generate a regular or extreme value
+        // - If it should be an extreme value, determine if it should be min/max
+        // - If it should be regular, determine its random fraction bits
+        let extremal_bits = 32 - fraction_bits;
+        let extremal_mask = (1 << extremal_bits) - 1;
+        let extremal_threshold = (extremal_bias as f64 * extremal_mask as f64).ceil() as u32;
         #[inline]
         move |rng| {
-            // Generate uniformly distributed random fraction bits
-            let fraction_bits = rng.gen::<u32>() & fraction_mask;
-            // Generate the representation of an exponent in the right range
-            let exp_bits = rng.gen_range(exp_bits_range.clone());
-            // Combine them to get a float with a random mantissa and the
-            // desired exponent range
-            f32::from_bits(fraction_bits | exp_bits)
+            // Determine if we should generate a regular or extremal value
+            let mut random_bits = rng.next_u32();
+            let extremal_roll = random_bits & extremal_mask;
+            random_bits >>= extremal_bits;
+            let (exp_bits, fraction_bits) = if extremal_roll <= extremal_threshold {
+                // Should generate an extremal value. Use one of the remaining
+                // bits of randomness to determine if it should be the minimal
+                // or maximal value from the specified exponent range
+                debug_assert!(32 - extremal_bits > 0);
+                if (random_bits & 1) == 1 {
+                    // Minimal value
+                    (exp_bits_range.start, 0)
+                } else {
+                    // Maximal value
+                    (exp_bits_range.end - 1, fraction_mask)
+                }
+            } else {
+                // Should generate a regular value, with a random fraction
+                // and an exponent in the right range. Start with the fraction.
+                debug_assert_eq!(32 - extremal_bits, fraction_bits);
+                let fraction_bits = random_bits;
+                // Generate the representation of an exponent in the right range
+                let exp_bits = rng.gen_range(exp_bits_range.clone());
+                // Combine them to get a positive float with a random mantissa
+                // and an exponent in the desired range.
+                (fraction_bits, exp_bits)
+            };
+            f32::from_bits(exp_bits | fraction_bits)
         }
     }
 
@@ -185,6 +229,14 @@ impl FloatLike for f32 {
         f32::is_subnormal(self)
     }
 
+    fn is_subnormal_or_zero(self) -> bool {
+        self.is_subnormal() || self == 0.0
+    }
+
+    fn min_subnormal() -> Self {
+        f32::from_bits(0b1)
+    }
+
     #[inline]
     fn splat(x: f32) -> Self {
         x
@@ -203,11 +255,14 @@ impl FloatLike for f32 {
 //
 impl FloatLike for f64 {
     #[inline]
-    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
+    fn sampler<R: Rng>(exp_range: Range<i32>, extremal_bias: f32) -> impl Fn(&mut R) -> Self {
         // Check that the specified exponent range is valid
         assert!(exp_range.start >= Self::FINITE_EXPS.start);
         assert!(exp_range.start < exp_range.end);
         assert!(exp_range.end <= Self::FINITE_EXPS.end + 1);
+        // Check that extremal_bias is a probability
+        assert!(extremal_bias >= 0.0);
+        assert!(extremal_bias <= 1.0);
         // From the binary64 wikipedia page
         // https://en.wikipedia.org/wiki/Double-precision_floating-point_format
         // we gather that an f64 has 52 low-order fraction bits...
@@ -216,15 +271,44 @@ impl FloatLike for f64 {
         // Then we translate our exponent range into an exponent bits range...
         let exp_to_bits = |exp| ((exp - Self::FINITE_EXPS.start) as u64) << fraction_bits;
         let exp_bits_range = exp_to_bits(exp_range.start)..exp_to_bits(exp_range.end);
+        // ...and finally we discretize extremal_bias into a lower-resolution
+        // integer fraction, so that we can use the same random bits to...
+        // - Determine if we should generate a regular or extreme value
+        // - If it should be an extreme value, determine if it should be min/max
+        // - If it should be regular, determine its random fraction bits
+        let extremal_bits = 64 - fraction_bits;
+        let extremal_mask = (1u64 << extremal_bits) - 1;
+        let extremal_threshold = (extremal_bias as f64 * extremal_mask as f64).ceil() as u64;
         #[inline]
         move |rng| {
-            // Generate uniformly distributed random fraction bits
-            let fraction_bits = rng.gen::<u64>() & fraction_mask;
-            // Generate the representation of an exponent in the right range
-            let exp_bits = rng.gen_range(exp_bits_range.clone());
-            // Combine them to get a float with a random mantissa and the
-            // desired exponent range
-            f64::from_bits(fraction_bits | exp_bits)
+            // Determine if we should generate a regular or extremal value
+            let mut random_bits = rng.gen::<u64>();
+            let extremal_roll = random_bits & extremal_mask;
+            random_bits >>= extremal_bits;
+            let (exp_bits, fraction_bits) = if extremal_roll <= extremal_threshold {
+                // Should generate an extremal value. Use one of the remaining
+                // bits of randomness to determine if it should be the minimal
+                // or maximal value from the specified exponent range
+                debug_assert!(64 - extremal_bits > 0);
+                if (random_bits & 1) == 1 {
+                    // Minimal value
+                    (exp_bits_range.start, 0)
+                } else {
+                    // Maximal value
+                    (exp_bits_range.end - 1, fraction_mask)
+                }
+            } else {
+                // Should generate a regular value, with a random fraction
+                // and an exponent in the right range. Start with the fraction.
+                debug_assert_eq!(64 - extremal_bits, fraction_bits);
+                let fraction_bits = random_bits;
+                // Generate the representation of an exponent in the right range
+                let exp_bits = rng.gen_range(exp_bits_range.clone());
+                // Combine them to get a positive float with a random mantissa
+                // and an exponent in the desired range.
+                (fraction_bits, exp_bits)
+            };
+            f64::from_bits(exp_bits | fraction_bits)
         }
     }
 
@@ -279,6 +363,14 @@ impl FloatLike for f64 {
         f64::is_subnormal(self)
     }
 
+    fn is_subnormal_or_zero(self) -> bool {
+        self.is_subnormal() || self == 0.0
+    }
+
+    fn min_subnormal() -> Self {
+        f64::from_bits(0b1)
+    }
+
     #[inline]
     fn splat(x: f32) -> Self {
         x as f64
@@ -302,10 +394,19 @@ where
     Self: Pessimize + StdFloat,
 {
     #[inline]
-    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
-        let sampler = f32::sampler(exp_range);
+    fn sampler<R: Rng>(exp_range: Range<i32>, extremal_bias: f32) -> impl Fn(&mut R) -> Self {
+        let regular_sampler = f32::sampler(exp_range.clone(), 0.0);
+        let extremal_sampler = f32::sampler(exp_range, 1.0);
+        let extremal_bias = (extremal_bias as f64 * u32::MAX as f64) as u32;
         #[inline]
-        move |rng| std::array::from_fn(|_| sampler(rng)).into()
+        move |rng| {
+            let sampler = if rng.next_u32() < extremal_bias {
+                &extremal_sampler
+            } else {
+                &regular_sampler
+            };
+            std::array::from_fn(|_| sampler(rng)).into()
+        }
     }
 
     const FINITE_EXPS: Range<i32> = f32::FINITE_EXPS;
@@ -360,11 +461,21 @@ where
     }
 
     fn is_normal(self) -> bool {
-        self[0].is_normal()
+        <Self as SimdFloat>::is_normal(self).all()
     }
 
     fn is_subnormal(self) -> bool {
-        self[0].is_subnormal()
+        <Self as SimdFloat>::is_subnormal(self).all()
+    }
+
+    fn is_subnormal_or_zero(self) -> bool {
+        let subnormal_mask = <Self as SimdFloat>::is_subnormal(self);
+        let zero_mask = self.simd_eq(Simd::splat(0.0));
+        (subnormal_mask | zero_mask).all()
+    }
+
+    fn min_subnormal() -> Self {
+        Simd::splat(f32::min_subnormal())
     }
 
     #[inline]
@@ -390,10 +501,19 @@ where
     Self: Pessimize + StdFloat,
 {
     #[inline]
-    fn sampler<R: Rng>(exp_range: Range<i32>) -> impl Fn(&mut R) -> Self {
-        let sampler = f64::sampler(exp_range);
+    fn sampler<R: Rng>(exp_range: Range<i32>, extremal_bias: f32) -> impl Fn(&mut R) -> Self {
+        let regular_sampler = f64::sampler(exp_range.clone(), 0.0);
+        let extremal_sampler = f64::sampler(exp_range, 1.0);
+        let extremal_bias = (extremal_bias as f64 * u32::MAX as f64) as u32;
         #[inline]
-        move |rng| std::array::from_fn(|_| sampler(rng)).into()
+        move |rng| {
+            let sampler = if rng.next_u32() < extremal_bias {
+                &extremal_sampler
+            } else {
+                &regular_sampler
+            };
+            std::array::from_fn(|_| sampler(rng)).into()
+        }
     }
 
     const FINITE_EXPS: Range<i32> = f64::FINITE_EXPS;
@@ -448,11 +568,21 @@ where
     }
 
     fn is_normal(self) -> bool {
-        self[0].is_normal()
+        <Self as SimdFloat>::is_normal(self).all()
     }
 
     fn is_subnormal(self) -> bool {
-        self[0].is_subnormal()
+        <Self as SimdFloat>::is_subnormal(self).all()
+    }
+
+    fn is_subnormal_or_zero(self) -> bool {
+        let subnormal_mask = <Self as SimdFloat>::is_subnormal(self);
+        let zero_mask = self.simd_eq(Simd::splat(0.0));
+        (subnormal_mask | zero_mask).all()
+    }
+
+    fn min_subnormal() -> Self {
+        Simd::splat(f64::min_subnormal())
     }
 
     #[inline]
@@ -473,8 +603,11 @@ where
 
 /// Random distribution of all possible normal numbers
 #[inline]
-pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    T::sampler((T::FINITE_EXPS.start + 1)..T::FINITE_EXPS.end)
+pub fn normal_sampler<T: FloatLike, R: Rng>(extremal_bias: f32) -> impl Fn(&mut R) -> T {
+    T::sampler(
+        (T::FINITE_EXPS.start + 1)..T::FINITE_EXPS.end,
+        extremal_bias,
+    )
 }
 
 /// Random distribution with all numbers in range `[0.5; 2[`
@@ -483,30 +616,68 @@ pub fn normal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
 /// range, but still coverage of all possible mantissa patterns and
 /// positive/negative exponents.
 #[inline]
-pub fn narrow_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    T::sampler(-1..1)
+pub fn narrow_sampler<T: FloatLike, R: Rng>(extremal_bias: f32) -> impl Fn(&mut R) -> T {
+    T::sampler(-1..1, extremal_bias)
 }
 
 /// Random distribution that can yield all subnormal numbers, but also has a
 /// small probability of yielding zero (1 / number of fraction bits of T)
 #[inline]
-pub fn subnormal_zero_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    T::sampler(T::FINITE_EXPS.start..(T::FINITE_EXPS.start + 1))
+pub fn subnormal_zero_sampler<T: FloatLike, R: Rng>(extremal_bias: f32) -> impl Fn(&mut R) -> T {
+    T::sampler(
+        T::FINITE_EXPS.start..(T::FINITE_EXPS.start + 1),
+        extremal_bias,
+    )
 }
 
 /// Random distribution of all possible subnormal numbers
 ///
-/// Unlike `subnormal_zero_sampler()`, this will never yield zero, but may run
-/// slower as a result.
+/// Unlike `subnormal_zero_sampler()`, this will never yield zero, at the
+/// expense of running a little slower and having a tiny bias towards generating
+/// more occurences of the minimal subnormal value.
 #[inline]
-pub fn subnormal_sampler<T: FloatLike, R: Rng>() -> impl Fn(&mut R) -> T {
-    let subnormal_or_zero = subnormal_zero_sampler();
-    let zero = T::splat(0.0);
-    move |rng: &mut R| loop {
-        let result = subnormal_or_zero(rng);
-        if result != zero {
-            return result;
+pub fn subnormal_sampler<T: FloatLike, R: Rng>(extremal_bias: f32) -> impl Fn(&mut R) -> T {
+    let subnormal_or_zero = subnormal_zero_sampler(extremal_bias);
+    let min_subnormal = T::min_subnormal();
+    move |rng: &mut R| {
+        let result: T = subnormal_or_zero(rng);
+        if !result.is_subnormal() {
+            min_subnormal
+        } else {
+            result
         }
+    }
+}
+
+/// Suggested `extremal_bias` when generating datasets of a certain size
+///
+/// Set `inside_test` for datasets that are generated inside of unit tests in
+/// order to bias the generation logic towards generating more extremal values,
+/// which is important as those values are unlikely to be hit randomly and more
+/// likely to trigger problems than other values.
+///
+/// This function then internally manages the following tradeoff:
+/// - When generating large test datasets, we want to enforce some minimal
+///   proportion of extremal values, to ensure that we hit those reasonably
+///   often and also combine them with each other reasonably often (e.g. combine
+///   an extremal accumulator with an extremal input)
+/// - When generating tiny test datasets, we would like to increase the odds
+///   that at least one value in the generated dataset is extremal. But not to
+///   the point where non-extremal values are not exercized enough.
+pub fn suggested_extremal_bias(inside_test: bool, output_size: usize) -> f32 {
+    if inside_test {
+        assert!(
+            cfg!(any(test, feature = "unstable_test")),
+            "extremal_bias is a testing feature and should not be enabled outside of unit tests"
+        );
+        let min_extremal_bias = 0.05;
+        let max_extremal_bias = 0.25;
+        let output_size = output_size as f64;
+        let desired_extremal_elems = (min_extremal_bias * output_size).ceil();
+        let desired_extremal_bias = (desired_extremal_elems / output_size) as f32;
+        desired_extremal_bias.max(max_extremal_bias)
+    } else {
+        0.0
     }
 }
 
@@ -516,6 +687,11 @@ pub mod test_utils {
     use super::*;
     use num_traits::Float;
     use std::slice;
+
+    /// Suggested `extremal_bias` when generating test data of a certain size
+    pub fn suggested_extremal_bias(output_size: usize) -> f32 {
+        super::suggested_extremal_bias(true, output_size)
+    }
 
     /// Reinterpret a FloatLike as an array of simpler scalar floats
     pub trait FloatLikeExt: FloatLike {
@@ -637,7 +813,8 @@ mod tests {
             || exp_range.end <= exp_range.start
             || exp_range.end > T::FINITE_EXPS.end + 1;
         let exp_range2 = exp_range.clone();
-        let make_sampler = || T::sampler(exp_range2);
+        let make_sampler =
+            || T::sampler(exp_range2, test_utils::suggested_extremal_bias(NUM_SAMPLES));
         if invalid_range {
             return assert_panics(make_sampler);
         }
@@ -662,7 +839,7 @@ mod tests {
                     // Can have subnormal or 0
                     if exp_range.end == T::FINITE_EXPS.start + 1 {
                         // Definitely subnormal or 0
-                        prop_assert!(sample.is_subnormal());
+                        prop_assert!(sample.is_subnormal_or_zero());
                     }
                 } else {
                     // None of NaN, +/-inf, subnormal and 0
@@ -749,7 +926,7 @@ mod tests {
         exp_range: Range<i32>,
     ) -> Result<(), TestCaseError> {
         // Fast comparison operations
-        let sampler = T::sampler(exp_range);
+        let sampler = T::sampler(exp_range, test_utils::suggested_extremal_bias(3));
         let x = sampler(rng);
         let y = sampler(rng);
         let has_fast_ord =
@@ -804,12 +981,13 @@ mod tests {
 
     /// Test standardized samplers
     fn test_standard_samplers<T: FloatLikeExt>(rng: &mut impl Rng) {
-        let normal = normal_sampler::<T, _>();
+        let extremal_bias = test_utils::suggested_extremal_bias(NUM_SAMPLES);
+        let normal = normal_sampler::<T, _>(extremal_bias);
         for _ in 0..NUM_SAMPLES {
             assert!(normal(rng).is_normal());
         }
 
-        let narrow = narrow_sampler::<T, _>();
+        let narrow = narrow_sampler::<T, _>(extremal_bias);
         for _ in 0..NUM_SAMPLES {
             let narrow = narrow(rng);
             for &scalar in narrow.as_scalars() {
@@ -818,16 +996,15 @@ mod tests {
             }
         }
 
-        let sub_zero = subnormal_zero_sampler::<T, _>();
+        let sub_zero = subnormal_zero_sampler::<T, _>(extremal_bias);
         for _ in 0..NUM_SAMPLES {
-            assert!(sub_zero(rng).is_subnormal());
+            assert!(sub_zero(rng).is_subnormal_or_zero());
         }
 
-        let subnormal = subnormal_sampler::<T, _>();
+        let subnormal = subnormal_sampler::<T, _>(extremal_bias);
         for _ in 0..NUM_SAMPLES {
             let subnormal = subnormal(rng);
             assert!(subnormal.is_subnormal());
-            assert_ne!(subnormal, T::splat(0.0));
         }
     }
     //

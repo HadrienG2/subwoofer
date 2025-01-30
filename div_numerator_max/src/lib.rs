@@ -52,18 +52,19 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for DivNumeratorMaxBenchmar
     }
 
     #[inline]
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
         generate_muldiv_inputs::<_, ILP>(
-            &mut self.input_storage,
-            rng,
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
+            &mut self.input_storage,
+            rng,
+            inside_test,
             invert_normal,
             cancel_subnormal,
         );
         DivNumeratorMaxRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::narrow_accumulators(rng),
+            accumulators: operations::narrow_accumulators(rng, inside_test),
         }
     }
 
@@ -155,8 +156,8 @@ mod tests {
         num_subnormals: usize,
     ) -> Result<(), TestCaseError> {
         test_generate_muldiv_inputs::<ILP>(
-            target,
             num_subnormals,
+            target,
             invert_normal,
             cancel_subnormal,
             integrate,

@@ -2,7 +2,7 @@
 
 use super::{DataStream, GeneratorStream, InputGenerator};
 use crate::{
-    floats::{self, FloatLike},
+    floats::{self, suggested_extremal_bias, FloatLike},
     inputs::InputsMut,
 };
 use rand::prelude::*;
@@ -49,19 +49,22 @@ use std::marker::PhantomData;
 ///     input value is normal and the last input value is subnormal, they are
 ///     swapped and what is now the new last normal input value is regenerated.
 pub fn generate_muldiv_inputs<Storage: InputsMut, const ILP: usize>(
+    num_subnormals: usize,
     target: &mut Storage,
     rng: &mut impl Rng,
-    num_subnormals: usize,
+    inside_test: bool,
     invert_normal: impl Fn(Storage::Element) -> Storage::Element + 'static,
     cancel_subnormal: impl Fn(Storage::Element) -> Storage::Element + 'static,
 ) {
     super::generate_input_streams::<_, _, ILP>(
+        num_subnormals,
         target,
         rng,
-        num_subnormals,
+        inside_test,
         MulDivGenerator {
             invert_normal,
             cancel_subnormal,
+            inside_test,
             _unused: PhantomData,
         },
     );
@@ -79,6 +82,9 @@ where
     /// Modify a newly generated narrow input to cancel the effect of a previous
     /// subnormal input
     cancel_subnormal: CancelSubnormal,
+
+    /// Truth that we are generating data for a unit test
+    inside_test: bool,
 
     /// Mark T as used so rustc doesn't go mad
     _unused: PhantomData<T>,
@@ -216,7 +222,8 @@ where
                 // accumulator magnitude change. As a result, the accumulator
                 // will be back to a narrow state after going through the full
                 // data stream, as it should.
-                let narrow = floats::narrow_sampler();
+                let narrow =
+                    floats::narrow_sampler(suggested_extremal_bias(self.generator.inside_test, 1));
                 *last = (self.generator.cancel_subnormal)(narrow(rng));
             }
         }
@@ -234,24 +241,29 @@ where
 /// <= max(f(A), f(B))`.
 #[cfg(any(test, feature = "unstable_test"))]
 pub fn test_generate_muldiv_inputs<const ILP: usize>(
-    target: &mut [f32],
     num_subnormals: usize,
+    target: &mut [f32],
     invert_normal: impl Fn(f32) -> f32 + Clone + 'static,
     cancel_subnormal: impl Fn(f32) -> f32 + Clone + 'static,
     integrate: impl Fn(f32, f32) -> f32 + 'static,
 ) -> Result<(), proptest::test_runner::TestCaseError> {
-    // Imports specific to test functionality
-    use crate::{floats, tests::assert_panics};
+    // Imports specific to this test functionality
+    use crate::{operations, tests::assert_panics};
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
+
+    // Tolerance of the final check that the accumulator stayed in narrow range
+    const NARROW_ACC_TOLERANCE: f32 = 5.0 * f32::EPSILON;
+    let acc_range = (0.5 - NARROW_ACC_TOLERANCE)..=(2.0 + NARROW_ACC_TOLERANCE);
 
     // Generate the inputs
     let mut rng = rand::thread_rng();
     let generate = |mut target: &mut [f32], rng: &mut _| {
         generate_muldiv_inputs::<_, ILP>(
+            num_subnormals,
             &mut target,
             rng,
-            num_subnormals,
+            true,
             invert_normal.clone(),
             cancel_subnormal.clone(),
         )
@@ -264,8 +276,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
     generate(target, &mut rng);
 
     // Set up narrow accumulators
-    let narrow = floats::narrow_sampler();
-    let accs_init: [f32; ILP] = std::array::from_fn(|_| narrow(&mut rng));
+    let accs_init = operations::narrow_accumulators::<f32, ILP>(&mut rng, true);
     let mut accs = accs_init;
 
     // Check the result and simulate its effect on narrow accumulators
@@ -311,8 +322,8 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
                 prop_assert!(!*should_be_end);
                 let expect_narrow_acc = || {
                     prop_assert!(
-                        (0.5..=2.0).contains(&acc_after),
-                        "{}* Expected a new accumulator value in narrow range [0.5; 2] but got {acc_after}",
+                        acc_range.contains(&acc_after),
+                        "{}* New accumulator value escaped narrow range [0.5; 2] by more than tolerance {NARROW_ACC_TOLERANCE}",
                         context()
                     );
                     Ok(())
@@ -367,8 +378,8 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
             .is_subnormal()
         {
             prop_assert!(
-                (0.5..=2.0).contains(&final_acc),
-                "{}* Expected a final accumulator value in narrow range [0.5; 2] but got {final_acc}",
+                acc_range.contains(&final_acc),
+                "{}* Final accumulator value {final_acc} escaped narrow range [0.5; 2] by more than tolerance {NARROW_ACC_TOLERANCE}",
                 context(target.len().div_ceil(ILP), acc_idx)
             );
         }
@@ -379,7 +390,10 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{floats, inputs::generators::tests::stream_target_subnormals};
+    use crate::{
+        floats::{self, test_utils::suggested_extremal_bias},
+        inputs::generators::tests::stream_target_subnormals,
+    };
     use proptest::prelude::*;
     use std::{cell::RefCell, rc::Rc};
 
@@ -394,11 +408,11 @@ mod tests {
     //
     impl CallbackMock {
         /// Set up a callback mock
-        fn new() -> (Self, impl Fn(f32) -> f32 + 'static) {
+        fn new(expected_call_count: usize) -> (Self, impl Fn(f32) -> f32 + 'static) {
             let invocations = Rc::new(RefCell::new(Vec::new()));
             let callback = {
                 let invocations = invocations.clone();
-                let normal = floats::normal_sampler();
+                let normal = floats::normal_sampler(suggested_extremal_bias(expected_call_count));
                 move |argument| {
                     let mut invocations = invocations.borrow_mut();
                     let result = normal(&mut rand::thread_rng());
@@ -420,19 +434,47 @@ mod tests {
         /// Test [`MulDivStream`]
         #[test]
         fn mul_div_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals()) {
+            // Determine how many normal/subnormal numbers we expect to generate
+            // and how many times we expect each callback to be called
+            let mut expected_normal_outputs = 0;
+            let mut expected_subnormal_outputs = 0;
+            let mut expected_invert_normal_calls = 0;
+            let mut expected_cancel_subnormal_calls = 0;
+            {
+                let mut invert_normal = false;
+                let mut cancel_subnormal = false;
+                for &is_subnormal in &subnormals {
+                    if is_subnormal {
+                        expected_subnormal_outputs += 1;
+                        invert_normal = false;
+                        cancel_subnormal = true;
+                    } else {
+                        expected_normal_outputs += 1;
+                        if invert_normal {
+                            expected_invert_normal_calls += 1;
+                        } else if cancel_subnormal {
+                            expected_cancel_subnormal_calls += 1;
+                            cancel_subnormal = false;
+                        }
+                        invert_normal = !invert_normal;
+                    }
+                }
+            }
+
             // Set up a mock input generator
-            let (mut invert_normal_mock, invert_normal) = CallbackMock::new();
-            let (mut cancel_subnormal_mock, cancel_subnormal) = CallbackMock::new();
+            let (mut invert_normal_mock, invert_normal) = CallbackMock::new(expected_invert_normal_calls);
+            let (mut cancel_subnormal_mock, cancel_subnormal) = CallbackMock::new(expected_cancel_subnormal_calls);
             let generator = MulDivGenerator {
                 invert_normal,
                 cancel_subnormal,
+                inside_test: true,
                 _unused: PhantomData,
             };
 
             // Set up a mock data stream
             let rng = &mut rand::thread_rng();
-            let mut narrow = floats::narrow_sampler();
-            let subnormal = floats::subnormal_sampler();
+            let mut narrow = floats::narrow_sampler(suggested_extremal_bias(expected_normal_outputs));
+            let subnormal = floats::subnormal_sampler(suggested_extremal_bias(expected_subnormal_outputs));
             let mut stream = <MulDivGenerator<f32, _, _> as InputGenerator<f32, ThreadRng>>::new_stream(&generator);
 
             // Simulate the generation of data stream, checking stream behavior

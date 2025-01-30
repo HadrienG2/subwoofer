@@ -7,7 +7,7 @@ pub mod muldiv;
 use super::InputsMut;
 use crate::{
     arch::MIN_FLOAT_REGISTERS,
-    floats::{self, FloatLike},
+    floats::{self, suggested_extremal_bias, FloatLike},
 };
 use rand::prelude::*;
 
@@ -18,21 +18,30 @@ use rand::prelude::*;
 /// into, except for `generate_max_inputs` which can generate fully random data
 /// and does not need to acknowledge the existence of interleaved data streams.
 fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
+    num_subnormals: usize,
     target: &mut Storage,
     rng: &mut R,
-    num_subnormals: usize,
+    inside_test: bool,
     generator: impl InputGenerator<Storage::Element, R>,
 ) {
     // Determine how many interleaved input data streams should be generated...
     assert!(ILP > 0);
     let num_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
-    inner(target.as_mut(), rng, num_subnormals, generator, num_streams);
+    inner(
+        num_subnormals,
+        target.as_mut(),
+        rng,
+        inside_test,
+        generator,
+        num_streams,
+    );
     //
     // ...then dispatch to a less generic backend to reduce code bloat
     fn inner<T: FloatLike, R: Rng, G: InputGenerator<T, R>>(
+        num_subnormals: usize,
         target: &mut [T],
         rng: &mut R,
-        num_subnormals: usize,
+        inside_test: bool,
         generator: G,
         num_streams: usize,
     ) {
@@ -46,7 +55,8 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
 
         // Generate each element of each data stream
         {
-            let mut generate_element = element_generator(num_subnormals, target.len(), rng);
+            let mut generate_element =
+                element_generator(num_subnormals, target.len(), rng, inside_test);
             let mut target_chunks = target.chunks_exact_mut(num_streams);
             let mut global_idx = 0;
             for chunk in target_chunks.by_ref() {
@@ -93,20 +103,29 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
 /// input data streams that play an asymmetric role, like the `acc <-
 /// max(fma(acc, input1, input2), lower_bound)` benchmark.
 pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
+    num_subnormals: usize,
     target: &mut Storage,
     rng: &mut R,
-    num_subnormals: usize,
+    inside_test: bool,
     generator: impl InputGenerator<Storage::Element, R>,
 ) {
     // Determine how many interleaved input data streams should be generated...
     let num_streams = if Storage::KIND.is_reused() { 1 } else { ILP };
-    inner(target.as_mut(), rng, num_subnormals, generator, num_streams);
+    inner(
+        num_subnormals,
+        target.as_mut(),
+        rng,
+        inside_test,
+        generator,
+        num_streams,
+    );
     //
     // ...then dispatch to a less generic backend to reduce code bloat
     fn inner<T: FloatLike, R: Rng, G: InputGenerator<T, R>>(
+        num_subnormals: usize,
         target: &mut [T],
         rng: &mut R,
-        num_subnormals: usize,
+        inside_test: bool,
         generator: G,
         num_streams: usize,
     ) {
@@ -128,7 +147,8 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
         // Generate each element of each data stream: regular bulk where each
         // data stream gets one new element...
         {
-            let mut generate_element = element_generator(num_subnormals, target_len, rng);
+            let mut generate_element =
+                element_generator(num_subnormals, target_len, rng, inside_test);
             let mut left_chunks = left_target.chunks_exact_mut(num_streams);
             let mut right_chunks = right_target.chunks_exact_mut(num_streams);
             let left_start = 0;
@@ -327,10 +347,17 @@ fn element_generator<R: Rng, S: GeneratorStream<R>>(
     num_subnormals: usize,
     target_len: usize,
     rng: &mut R,
+    inside_test: bool,
 ) -> impl FnMut(&mut S, usize) -> S::Float + '_ {
     assert!(num_subnormals <= target_len);
-    let narrow = floats::narrow_sampler::<S::Float, R>();
-    let subnormal = floats::subnormal_sampler::<S::Float, R>();
+    let narrow = floats::narrow_sampler::<S::Float, R>(suggested_extremal_bias(
+        inside_test,
+        target_len - num_subnormals,
+    ));
+    let subnormal = floats::subnormal_sampler::<S::Float, R>(suggested_extremal_bias(
+        inside_test,
+        num_subnormals,
+    ));
     let mut pick_subnormal = subnormal_picker(num_subnormals, target_len);
     move |state: &mut S, global_idx: usize| {
         debug_assert!(global_idx < target_len);
@@ -724,10 +751,10 @@ pub(crate) mod tests {
             if num_subnormals > target_len {
                 return assert_panics(AssertUnwindSafe(|| {
                     #[allow(unused_must_use)]
-                    super::element_generator::<_, GeneratorStreamMock<f32>>(num_subnormals, target_len, &mut rng);
+                    super::element_generator::<_, GeneratorStreamMock<f32>>(num_subnormals, target_len, &mut rng, true);
                 }));
             }
-            let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
+            let mut generator = super::element_generator(num_subnormals, target_len, &mut rng, true);
             let mut streams =
                 std::iter::repeat_with(GeneratorStreamMock::<f32>::new).take(num_streams).collect::<Box<[_]>>();
 
@@ -779,10 +806,10 @@ pub(crate) mod tests {
             if num_subnormals > target_len {
                 return assert_panics(AssertUnwindSafe(|| {
                     #[allow(unused_must_use)]
-                    super::element_generator::<_, GeneratorStreamMock<f32>>(num_subnormals, target_len, &mut rng);
+                    super::element_generator::<_, GeneratorStreamMock<f32>>(num_subnormals, target_len, &mut rng, true);
                 }));
             }
-            let mut generator = super::element_generator(num_subnormals, target_len, &mut rng);
+            let mut generator = super::element_generator(num_subnormals, target_len, &mut rng, true);
             let mut streams =
                 std::iter::repeat_with(GeneratorStreamMock::<f32>::new).take(num_streams).collect::<Box<[_]>>();
 
@@ -896,9 +923,10 @@ pub(crate) mod tests {
         // Run generate_input_streams
         let generate = |target: &mut Storage| {
             generate_input_streams::<_, _, ILP>(
+                num_subnormals,
                 target,
                 &mut rand::thread_rng(),
-                num_subnormals,
+                true,
                 generator,
             )
         };
@@ -1075,9 +1103,10 @@ pub(crate) mod tests {
         // Run generate_input_pairs
         let generate = |target: &mut Storage| {
             generate_input_pairs::<_, _, ILP>(
+                num_subnormals,
                 target,
                 &mut rand::thread_rng(),
-                num_subnormals,
+                true,
                 generator,
             )
         };
