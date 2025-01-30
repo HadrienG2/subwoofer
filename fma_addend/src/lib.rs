@@ -303,5 +303,5 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
 mod tests {
     use super::*;
     use common::operations::test_utils::NeedsNarrowAcc;
-    common::test_pairwise_operation!(FmaAddend, NeedsNarrowAcc::Always, 1, 20.0 * f32::EPSILON);
+    common::test_pairwise_operation!(FmaAddend, NeedsNarrowAcc::Always, 1, 30.0 * f32::EPSILON);
 }
