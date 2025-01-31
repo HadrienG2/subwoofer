@@ -44,7 +44,7 @@ pub trait Inputs: AsRef<[Self::Element]> {
 /// Like [`Inputs`] but allows unrestricted element mutation
 pub trait InputsMut: Inputs + AsMut<[Self::Element]> {}
 
-/// Kind of [`InputStorage`] that we are dealing with
+/// Kind of [`Inputs`] that we are dealing with
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputKind {

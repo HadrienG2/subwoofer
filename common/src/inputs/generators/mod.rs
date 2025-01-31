@@ -93,7 +93,7 @@ fn generate_input_streams<Storage: InputsMut, R: Rng, const ILP: usize>(
     }
 }
 
-/// Like [`generate_input_streams()`] but the dataset is split in two even
+/// Like `generate_input_streams()` but the dataset is split in two even
 /// halves and each data stream is composed of pairs of elements from each half
 /// (which itself contains the usual interleaved data layout).
 ///

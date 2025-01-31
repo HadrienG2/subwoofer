@@ -87,8 +87,7 @@ pub trait Benchmark {
     /// [`normal_accumulators()`].
     ///
     /// The input storage of the resulting [`BenchmarkRun`] should be derived
-    /// from that of this benchmark through
-    /// [`clone_or_reborrow()`](InputStorage::clone_or_reborrow).
+    /// from that of this benchmark through [`freeze()`](Inputs::freeze).
     ///
     /// Finally, `inside_test` should be set if and only if the benchmark is run
     /// in the context of a unit test. This increases the odds that extremal
@@ -125,15 +124,15 @@ pub trait BenchmarkRun {
     ///   point, or at least converge to a normal limit with properties that are
     ///   similar to those of the starting point.
     /// - Inputs should be passed through a strategically placed
-    ///   [`hide_inplace()`](InputStorage::hide_inplace) optimization barrier if
-    ///   there is any chance that the compiler may optimize under the knowledge
-    ///   that we are repeatedly running over the same inputs.
+    ///   [`hide_inplace()`](Inputs::hide_inplace) optimization barrier if there
+    ///   is any chance that the compiler may optimize under the knowledge that
+    ///   we are repeatedly running over the same inputs.
     ///
     /// If your benchmark sequentially feeds all inputs to a single accumulator,
-    /// then you may use the provided [`integrate_full()`] skeleton to implement
-    /// this function. If your benchmark alternates between two different ways
-    /// to integrate inputs into accumulators, then you may use the provided
-    /// [`integrate_halves()`] skeleton to implement this function.
+    /// then you may use the provided [`integrate()`] skeleton to implement this
+    /// function. If your benchmark alternates between two different ways to
+    /// integrate inputs into accumulators, then you may use the provided
+    /// [`integrate_pairs()`] skeleton to implement this function.
     ///
     /// In any case, you will also want to regularly pass accumulators through
     /// the provided [`hide_accumulators()`] function, otherwise the compiler
