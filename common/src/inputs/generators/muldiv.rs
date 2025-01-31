@@ -248,7 +248,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
     integrate: impl Fn(f32, f32) -> f32 + 'static,
 ) -> Result<(), proptest::test_runner::TestCaseError> {
     // Imports specific to this test functionality
-    use crate::{operations, tests::assert_panics};
+    use crate::{operations, test_utils::assert_panics};
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
 
@@ -284,7 +284,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
     let mut expected_state: [MulDivState<f32>; ILP] =
         std::array::from_fn(|_| MulDivState::Unconstrained);
     let mut should_be_end = [false; ILP];
-    let context = |chunk_idx: usize, acc_idx| {
+    let error_context = |chunk_idx: usize, acc_idx| {
         format!(
             "\n\
             * Starting from initial accumulator {:?}\n\
@@ -305,17 +305,22 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
         {
             let acc_before = *acc;
             let acc_after = integrate(*acc, elem);
-            let context = || {
+            let error_context = || {
                 format!(
                     "{}* While integrating next input {elem} into accumulator {acc_before}, with result {acc_after}\n",
-                    context(chunk_idx, acc_idx)
+                    error_context(chunk_idx, acc_idx)
                 )
             };
             if elem.is_subnormal() {
                 actual_subnormals += 1;
                 *expected_state = MulDivState::CancelSubnormal;
             } else if elem == 1.0 {
-                prop_assert_eq!(expected_state, &MulDivState::Unconstrained, "{}", context());
+                prop_assert_eq!(
+                    expected_state,
+                    &MulDivState::Unconstrained,
+                    "{}",
+                    error_context()
+                );
                 *should_be_end = true;
             } else {
                 prop_assert!(elem.is_normal());
@@ -324,7 +329,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
                     prop_assert!(
                         acc_range.contains(&acc_after),
                         "{}* New accumulator value escaped narrow range [0.5; 2] by more than tolerance {NARROW_ACC_TOLERANCE}",
-                        context()
+                        error_context()
                     );
                     Ok(())
                 };
@@ -333,7 +338,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
                         prop_assert!(
                             (0.5..=2.0).contains(&elem),
                             "{}* Expected an input in narrow range [0.5; 2] but got {elem}",
-                            context()
+                            error_context()
                         );
                         MulDivState::InvertNormal(elem)
                     }
@@ -343,7 +348,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
                             elem,
                             inverse,
                             "{}* Expected input {} that's the inverse of the previous input {}, but got {}",
-                            context(),
+                            error_context(),
                             inverse,
                             inverted,
                             elem
@@ -358,7 +363,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
                         let max = bound2.max(bound2);
                         prop_assert!(
                             (min..=max).contains(&elem),
-                            "{}* Expected an input in subnormal recovery range [{min}; {max}] but got {elem}", context()
+                            "{}* Expected an input in subnormal recovery range [{min}; {max}] but got {elem}", error_context()
                         );
                         expect_narrow_acc()?;
                         MulDivState::Unconstrained
@@ -380,7 +385,7 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
             prop_assert!(
                 acc_range.contains(&final_acc),
                 "{}* Final accumulator value {final_acc} escaped narrow range [0.5; 2] by more than tolerance {NARROW_ACC_TOLERANCE}",
-                context(target.len().div_ceil(ILP), acc_idx)
+                error_context(target.len().div_ceil(ILP), acc_idx)
             );
         }
     }
@@ -392,7 +397,7 @@ mod tests {
     use super::*;
     use crate::{
         floats::{self, test_utils::suggested_extremal_bias},
-        inputs::generators::tests::stream_target_subnormals,
+        inputs::generators::test_utils::stream_target_subnormals,
     };
     use proptest::prelude::*;
     use std::{cell::RefCell, rc::Rc};
@@ -476,8 +481,10 @@ mod tests {
             let mut narrow = floats::narrow_sampler(suggested_extremal_bias(expected_normal_outputs));
             let subnormal = floats::subnormal_sampler(suggested_extremal_bias(expected_subnormal_outputs));
             let mut stream = <MulDivGenerator<f32, _, _> as InputGenerator<f32, ThreadRng>>::new_stream(&generator);
+            prop_assert!(std::ptr::eq(stream.generator, &generator));
+            prop_assert_eq!(&stream.state, &MulDivState::Unconstrained);
 
-            // Simulate the generation of data stream, checking stream behavior
+            // Simulate the generation of dataset, checking stream behavior
             let stream_indices = (0..target.len()).skip(stream_idx).step_by(num_streams);
             for (elem_idx, is_subnormal) in stream_indices.clone().zip(subnormals) {
                 let new_value = if is_subnormal {

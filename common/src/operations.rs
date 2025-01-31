@@ -390,7 +390,7 @@ pub mod test_utils {
             generators::test_utils::num_subnormals,
             test_utils::{f32_array, f32_vec},
         },
-        tests::assert_panics,
+        test_utils::assert_panics,
     };
     use num_traits::NumCast;
     use proptest::prelude::*;
@@ -821,13 +821,12 @@ pub mod test_utils {
 
         // Instantiate benchmark, checking for invalid input length
         let input_len_granularity = 1 + (pairwise as usize);
-        let benchmark = if input_storage.as_ref().len() % input_len_granularity != 0 {
+        if input_storage.as_ref().len() % input_len_granularity != 0 {
             return assert_panics(AssertUnwindSafe(|| {
                 Op::make_benchmark::<_, ILP>(input_storage)
             }));
-        } else {
-            Op::make_benchmark::<_, ILP>(input_storage)
-        };
+        }
+        let benchmark = Op::make_benchmark::<_, ILP>(input_storage);
 
         // Check that the number of operation matches expectations
         prop_assert_eq!(benchmark.num_operations(), accumulated_len / inputs_per_op);
@@ -852,21 +851,19 @@ pub mod test_utils {
         let input_is_reused = Storage::KIND.is_reused();
 
         // Set up a benchmark...
-        let mut benchmark = if pairwise && input_len % 2 != 0 {
+        if pairwise && input_len % 2 != 0 {
             return assert_panics(AssertUnwindSafe(|| {
                 Op::make_benchmark::<_, ILP>(input_storage)
             }));
-        } else {
-            Op::make_benchmark::<_, ILP>(input_storage)
-        };
+        }
+        let mut benchmark = Op::make_benchmark::<_, ILP>(input_storage);
 
         // ...then specify the number of operations...
         let initial_num_ops = benchmark.num_operations();
         if num_subnormals > input_len {
             return assert_panics(AssertUnwindSafe(|| benchmark.setup_inputs(num_subnormals)));
-        } else {
-            benchmark.setup_inputs(num_subnormals);
         }
+        benchmark.setup_inputs(num_subnormals);
         prop_assert_eq!(benchmark.num_operations(), initial_num_ops);
 
         // ...and finally set up a benchmark run
@@ -1036,7 +1033,8 @@ mod tests {
     use crate::{
         arch::MIN_FLOAT_REGISTERS,
         inputs::test_utils::{f32_array, f32_vec, ordered_f32, ordered_f32_array, ordered_f32_vec},
-        tests::{assert_panics, proptest_cases},
+        test_utils::assert_panics,
+        tests::proptest_cases,
     };
     use proptest::prelude::*;
     use std::{cell::RefCell, panic::AssertUnwindSafe, rc::Rc};
@@ -1406,9 +1404,8 @@ mod tests {
             return assert_panics(AssertUnwindSafe(|| {
                 integrate_pairs(&mut accumulators, hide_accumulators, &inputs, iter)
             }));
-        } else {
-            integrate_pairs(&mut accumulators, hide_accumulators, &inputs, iter)
         }
+        integrate_pairs(&mut accumulators, hide_accumulators, &inputs, iter);
         prop_assert_eq!(accumulators, accs_init);
 
         // Check iter() log against expectations

@@ -100,10 +100,11 @@ mod tests {
     use crate::{
         floats::{self, test_utils::suggested_extremal_bias},
         inputs::generators::{
-            test_utils::target_and_num_subnormals, tests::stream_target_subnormals,
+            test_utils::target_and_num_subnormals,
+            test_utils::{num_normals_subnormals, stream_target_subnormals},
         },
         operations,
-        tests::assert_panics,
+        test_utils::assert_panics,
     };
     use core::f32;
     use proptest::prelude::*;
@@ -115,15 +116,11 @@ mod tests {
         fn add_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals()) {
             // Set up a mock environment
             let rng = &mut rand::thread_rng();
-            let [num_narrow, num_subnormal] = subnormals.iter().fold([0, 0], |[num_narrow, num_subnormals], &is_subnormal| {
-                let new_subnormal = is_subnormal as usize;
-                let new_normal = !is_subnormal as usize;
-                [num_narrow + new_normal, num_subnormals + new_subnormal]
-            });
+            let [num_narrow, num_subnormal] = num_normals_subnormals(&subnormals);
             let mut narrow = floats::narrow_sampler(suggested_extremal_bias(num_narrow));
             let subnormal = floats::subnormal_sampler(suggested_extremal_bias(num_subnormal));
 
-            // Simulate the creation of a data stream, checking behavior
+            // Simulate the creation of a dataset, checking behavior
             let mut stream = AddStream::Unconstrained;
             let stream_indices = (0..target.len()).skip(stream_idx).step_by(num_streams);
             for (elem_idx, is_subnormal) in stream_indices.clone().zip(subnormals) {
@@ -230,7 +227,7 @@ mod tests {
             let threshold = 30.0 * f32::EPSILON * init;
             prop_assert!(
                 difference < threshold,
-                "{acc} is too far from {init} (difference {difference} above threshold {threshold} after integrating inputs {target:?})"
+                "{acc} is too far from {init} (difference {difference} above threshold {threshold} after integrating inputs {target:?}"
             )
         }
         Ok(())

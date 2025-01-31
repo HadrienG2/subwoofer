@@ -744,7 +744,7 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::{test_utils::*, *};
-    use crate::tests::assert_panics;
+    use crate::test_utils::assert_panics;
     use num_traits::{Float, NumCast};
     use proptest::prelude::*;
     use std::num::FpCategory;

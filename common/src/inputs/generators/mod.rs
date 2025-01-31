@@ -299,6 +299,16 @@ pub struct DataStream<'data, T> {
 }
 //
 impl<'data, T> DataStream<'data, T> {
+    /// Set up a data stream
+    pub fn new(target: &'data mut [T], stream_idx: usize, num_streams: usize) -> Self {
+        assert!(stream_idx < num_streams);
+        Self {
+            target,
+            stream_idx,
+            num_streams,
+        }
+    }
+
     /// Access a scalar element by global position
     ///
     /// The specified global index must belong to the data stream of interest.
@@ -396,6 +406,8 @@ fn subnormal_picker<R: Rng>(
 pub mod test_utils {
     use proptest::{prelude::*, sample::SizeRange};
 
+    use crate::arch::MIN_FLOAT_REGISTERS;
+
     /// Length of a dataset that can be reinterpreted as N streams of
     /// scalars or pairs, where the streams may or may not be of equal length
     pub(crate) fn target_len(num_streams: usize, pairs: bool) -> impl Strategy<Value = usize> {
@@ -454,20 +466,24 @@ pub mod test_utils {
             )
         })
     }
-}
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::{test_utils::*, *};
-    use crate::tests::assert_panics;
-    use proptest::{prelude::*, sample::SizeRange};
-    use std::{
-        cell::RefCell,
-        ops::{Deref, Range},
-        panic::AssertUnwindSafe,
-        ptr::NonNull,
-        rc::Rc,
-    };
+    /// Like [`target_len()`] but also generates the number of streams
+    pub(crate) fn num_streams_and_target_len(pairs: bool) -> impl Strategy<Value = (usize, usize)> {
+        (1usize..=MIN_FLOAT_REGISTERS)
+            .prop_flat_map(move |num_streams| (Just(num_streams), target_len(num_streams, pairs)))
+    }
+
+    /// Dataset that can be evenly cut into N streams of scalars or pairs
+    pub(crate) fn num_streams_and_target<T: Arbitrary>(
+        pairs: bool,
+    ) -> impl Strategy<Value = (usize, Vec<T>)> {
+        num_streams_and_target_len(pairs).prop_flat_map(|(num_streams, target_len)| {
+            (
+                Just(num_streams),
+                prop::collection::vec(any::<T>(), target_len),
+            )
+        })
+    }
 
     /// Inputs for [`GeneratorStream`] implementation tests
     pub fn stream_target_subnormals() -> impl Strategy<Value = (usize, usize, Vec<f32>, Vec<bool>)>
@@ -482,6 +498,32 @@ pub(crate) mod tests {
             )
         })
     }
+
+    /// Extract a count of normal and subnormal numbers from the "subnormals"
+    /// output of [`stream_target_subnormals()`]
+    pub fn num_normals_subnormals(subnormals: &[bool]) -> [usize; 2] {
+        subnormals
+            .iter()
+            .fold([0, 0], |[num_narrow, num_subnormals], &is_subnormal| {
+                let new_subnormal = is_subnormal as usize;
+                let new_normal = !is_subnormal as usize;
+                [num_narrow + new_normal, num_subnormals + new_subnormal]
+            })
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::{test_utils::*, *};
+    use crate::test_utils::assert_panics;
+    use proptest::{prelude::*, sample::SizeRange};
+    use std::{
+        cell::RefCell,
+        ops::{Deref, Range},
+        panic::AssertUnwindSafe,
+        ptr::NonNull,
+        rc::Rc,
+    };
 
     /// Reasonable arguments to `subnormal_picker` and `generate_elements`
     fn subnormal_config() -> impl Strategy<Value = (usize, usize)> {
@@ -532,24 +574,6 @@ pub(crate) mod tests {
         num_streams: usize,
     ) -> impl Iterator<Item = usize> {
         (0..).skip(stream_idx).step_by(num_streams)
-    }
-
-    /// Like [`target_len()`] but also generates the number of streams
-    fn num_streams_and_target_len(pairs: bool) -> impl Strategy<Value = (usize, usize)> {
-        (1usize..=MIN_FLOAT_REGISTERS)
-            .prop_flat_map(move |num_streams| (Just(num_streams), target_len(num_streams, pairs)))
-    }
-
-    /// Dataset that can be evenly cut into N streams of scalars or pairs
-    pub fn num_streams_and_target<T: Arbitrary>(
-        pairs: bool,
-    ) -> impl Strategy<Value = (usize, Vec<T>)> {
-        num_streams_and_target_len(pairs).prop_flat_map(|(num_streams, target_len)| {
-            (
-                Just(num_streams),
-                prop::collection::vec(any::<T>(), target_len),
-            )
-        })
     }
 
     proptest! {
