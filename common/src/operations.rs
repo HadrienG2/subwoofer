@@ -393,6 +393,9 @@ pub mod test_utils {
     use std::panic::AssertUnwindSafe;
 
     /// Number of benchmark iterations performed by operation tests
+    ///
+    /// This allows you to catch longer-term accumulator drift, at the expense
+    /// of proportionally slower test runs.
     const NUM_TEST_ITERATIONS: usize = 100;
 
     /// Truth that a certain operation requires the benchmark's accumulators to

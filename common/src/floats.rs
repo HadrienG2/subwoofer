@@ -749,9 +749,6 @@ mod tests {
     use proptest::prelude::*;
     use std::num::FpCategory;
 
-    /// Number of samples used in sampler tests
-    const NUM_SAMPLES: usize = 100;
-
     /// Test properties common to all FloatLike values
     fn test_value<T: FloatLikeExt>(x: T) -> Result<(), TestCaseError> {
         // Test square root
@@ -813,15 +810,16 @@ mod tests {
             || exp_range.end <= exp_range.start
             || exp_range.end > T::FINITE_EXPS.end + 1;
         let exp_range2 = exp_range.clone();
+        let num_samples = crate::tests::proptest_cases();
         let make_sampler =
-            || T::sampler(exp_range2, test_utils::suggested_extremal_bias(NUM_SAMPLES));
+            || T::sampler(exp_range2, test_utils::suggested_extremal_bias(num_samples));
         if invalid_range {
             return assert_panics(make_sampler);
         }
 
         // Check the sampler output
         let sampler = make_sampler();
-        for _ in 0..NUM_SAMPLES {
+        for _ in 0..num_samples {
             let sample = sampler(rng);
 
             // Global properties that can be queried via the FloatLike trait
@@ -981,14 +979,15 @@ mod tests {
 
     /// Test standardized samplers
     fn test_standard_samplers<T: FloatLikeExt>(rng: &mut impl Rng) {
-        let extremal_bias = test_utils::suggested_extremal_bias(NUM_SAMPLES);
+        let num_samples = crate::tests::proptest_cases();
+        let extremal_bias = test_utils::suggested_extremal_bias(num_samples);
         let normal = normal_sampler::<T, _>(extremal_bias);
-        for _ in 0..NUM_SAMPLES {
+        for _ in 0..num_samples {
             assert!(normal(rng).is_normal());
         }
 
         let narrow = narrow_sampler::<T, _>(extremal_bias);
-        for _ in 0..NUM_SAMPLES {
+        for _ in 0..num_samples {
             let narrow = narrow(rng);
             for &scalar in narrow.as_scalars() {
                 assert!(scalar >= <T::Scalar as NumCast>::from(0.5f32).unwrap());
@@ -997,12 +996,12 @@ mod tests {
         }
 
         let sub_zero = subnormal_zero_sampler::<T, _>(extremal_bias);
-        for _ in 0..NUM_SAMPLES {
+        for _ in 0..num_samples {
             assert!(sub_zero(rng).is_subnormal_or_zero());
         }
 
         let subnormal = subnormal_sampler::<T, _>(extremal_bias);
-        for _ in 0..NUM_SAMPLES {
+        for _ in 0..num_samples {
             let subnormal = subnormal(rng);
             assert!(subnormal.is_subnormal());
         }

@@ -15,6 +15,18 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use std::panic::{self, UnwindSafe};
 
+    /// Number of tests to execute for "hidden" property-based tests (i.e. those
+    /// that are property based but do not use proptest's RNG)
+    ///
+    /// Attempts to match the match the behavior of proptest for consistency.
+    #[cfg(test)]
+    pub fn proptest_cases() -> usize {
+        std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|cases| cases.parse().ok())
+            .unwrap_or(256)
+    }
+
     /// Assert that a function panics in a proptest-friendly manner
     pub fn assert_panics<T>(f: impl FnOnce() -> T + UnwindSafe) -> Result<(), TestCaseError> {
         if panic::catch_unwind(f).is_err() {

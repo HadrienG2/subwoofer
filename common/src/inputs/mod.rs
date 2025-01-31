@@ -169,7 +169,7 @@ impl<'buffer, T: FloatLike> Inputs for &'buffer mut [T] {
 impl<T: FloatLike> InputsMut for &mut [T] {}
 
 /// Test utilities that are used by other crates in the workspace
-#[cfg(feature = "unstable_test")]
+#[cfg(any(test, feature = "unstable_test"))]
 pub mod test_utils {
     use proptest::{prelude::*, sample::SizeRange};
     use std::ops::Range;
