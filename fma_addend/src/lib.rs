@@ -68,9 +68,9 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
         // Unfortunately, for this to work, the inverse must be exact, and this
         // only happens when the multiplier is a power of two. We'll avoid 1 as
         // a multiplier since the hardware is too likely to over-optimize for it
-        // (fma(1, x, y) can be simplified into x + y), so if we want to only
-        // use numbers in the usual "narrow" [1/2; 2] range, this means that our
-        // only remaining choices are 1/2 and 2.
+        // (because fma(1, x, y) trivially simplifies into x + y), so if we want
+        // to only use numbers in the usual "narrow" [1/2; 2] range, this means
+        // that our only remaining choices are 1/2 and 2.
         let multiplier = if rng.gen::<bool>() { 0.5 } else { 2.0 };
         let multiplier = pessimize::hide(Storage::Element::splat(multiplier));
         let inv_multiplier = pessimize::hide(Storage::Element::splat(1.0) / multiplier);
@@ -82,10 +82,7 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaAddendBenchmark<Stor
             &mut self.input_storage,
             rng,
             inside_test,
-            FmaAddendGenerator {
-                multiplier,
-                inv_multiplier,
-            },
+            FmaAddendGenerator::new(multiplier),
         );
 
         // Set up benchmark run
@@ -153,6 +150,18 @@ struct FmaAddendGenerator<T: FloatLike> {
 
     /// Inverse of `Self::multiplier`
     inv_multiplier: T,
+}
+//
+impl<T: FloatLike> FmaAddendGenerator<T> {
+    /// Set up an input generator
+    fn new(multiplier: T) -> Self {
+        let inv_multiplier = T::splat(1.0) / multiplier;
+        debug_assert_eq!(T::splat(1.0) / inv_multiplier, multiplier);
+        Self {
+            multiplier,
+            inv_multiplier,
+        }
+    }
 }
 //
 impl<T: FloatLike, R: Rng> InputGenerator<T, R> for FmaAddendGenerator<T> {
@@ -304,5 +313,9 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
 mod tests {
     use super::*;
     use common::operations::test_utils::NeedsNarrowAcc;
+
+    // TODO: Test the input generator, as usual check both the low-level mechanics and the high-level result
+
+    // Test the Operation implementation
     common::test_pairwise_operation!(FmaAddend, NeedsNarrowAcc::Always, 1, 30.0 * f32::EPSILON);
 }

@@ -59,5 +59,6 @@ There is unfortunately one exception to the "`chained` is latency-bound" general
 rule, which is the `sqrt_positive_max` benchmark. This benchmark does not
 feature an SQRT → SQRT → SQRT... dependency chain, because performing such a
 sequence of operations while guaranteeing continued subnormal input is
-difficult. Therefore, this benchmark cannot currently be used to measure SQRT
-latency, and its output in `chained` mode should be ignored for now.
+impossible as the square root of a subnormal number is a normal number.
+Therefore, this benchmark cannot currently be used to measure SQRT latency, and
+its output in `chained` mode should be ignored for now.

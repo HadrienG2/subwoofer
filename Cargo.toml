@@ -112,7 +112,7 @@ check = [
     "bench_add",                 # ADD is assumed to be the same as SUB
     "bench_max",                 # MAX is assumed to be same as MIN
     "bench_mul_max",             # Includes subnormal MUL -> subnormal MAX
-    "bench_sqrt_positive_max",   # Includes subnormal SQRT -> maybe-subnormal MAX
+    "bench_sqrt_positive_max",   # Includes subnormal SQRT -> normal MAX
     "bench_div_numerator_max",   # Includes DIV with subnormal numerator -> subnormal MAX
     "bench_div_denominator_min", # Includes DIV with subnormal denominator -> infinite MIN
     "bench_fma_full_max",        # Includes subnormal FMA -> subnormal MAX
@@ -150,7 +150,7 @@ bench_all = [
     "bench_add",                 # ADD with x%subnormal input, normal result, assumed to behave just like SUB
     "bench_max",                 # MAX with x%subnormal input, normal result, assumed to behave just like MIN
     "bench_mul_max",             # MUL with x%subnormal input & result -> x%subnormal MAX
-    "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> x²%subnormal MAX
+    "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> normal MAX
     "bench_div_numerator_max",   # DIV with x%subnormal numerator, normal denominator -> x%subnormal MAX
     "bench_div_denominator_min", # DIV with x%subnormal denominator, normal numerator -> x%infinite MIN
     "bench_fma_addend",          # FMA with x%subnormal addend, normal multiplier & result

@@ -55,10 +55,11 @@ isolation, which we can use to estimate the latency and throughput of MUL.
 
 ## SQRT
 
-The square root of a subnormal number may or may not be a subnormal number, but
-as before we can use a MAX to get back into normal range, and subtract the
-overhead of MAX to get an estimate of the overhead of SQRT. Therefore, much like
-we had a `mul_max` benchmark, we also have a `sqrt_positive_max` benchmark.
+A square root is a unary operation, and the square root of a subnormal number is
+a normal number. Therefore, to keep integrating new possibly subnormal inputs
+into our accumulator, we cannot use just SQRT and must also use a binary
+operation. Hence we use the `acc <- max(acc, SQRT(input))` operation as the
+basis of the `sqrt_positive_max` benchmark.
 
 Why "positive", you may ask? Well, for now we only test with positive inputs,
 for a few reasons:
