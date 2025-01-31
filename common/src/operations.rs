@@ -1025,3 +1025,128 @@ pub mod test_utils {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        arch::MIN_FLOAT_REGISTERS,
+        inputs::test_utils::{f32_array, f32_vec},
+        tests::proptest_cases,
+    };
+    use proptest::prelude::*;
+
+    /// Generate a sensible degree of instruction-level parallelism
+    fn ilp() -> impl Strategy<Value = usize> {
+        1..=MIN_FLOAT_REGISTERS
+    }
+
+    // Tests for [`accumulated_len()`]
+    proptest! {
+        #[test]
+        fn accumulated_len_0regs(ilp in ilp()) {
+            prop_assert_eq!(accumulated_len::<[f32; 0]>(&[], ilp), 0)
+        }
+
+        #[test]
+        fn accumulated_len_1reg(inputs in f32_array::<1>(), ilp in ilp()) {
+            prop_assert_eq!(accumulated_len(&inputs, ilp), ilp)
+        }
+
+        #[test]
+        fn accumulated_len_2regs(inputs in f32_array::<2>(), ilp in ilp()) {
+            prop_assert_eq!(accumulated_len(&inputs, ilp), 2 * ilp)
+        }
+
+        #[test]
+        fn accumulated_len_3regs(inputs in f32_array::<3>(), ilp in ilp()) {
+            prop_assert_eq!(accumulated_len(&inputs, ilp), 3 * ilp)
+        }
+
+        #[test]
+        fn accumulated_len_4regs(inputs in f32_array::<4>(), ilp in ilp()) {
+            prop_assert_eq!(accumulated_len(&inputs, ilp), 4 * ilp)
+        }
+
+        #[test]
+        fn accumulated_len_mem(inputs in f32_vec(false), ilp in ilp()) {
+            prop_assert_eq!(accumulated_len(&&inputs[..], ilp), inputs.len())
+        }
+    }
+
+    /// Test for `narrow_accumulators()` in the special case of an empty output
+    #[test]
+    fn narrow_accumulators_0regs() {
+        // Shouldn't crash, all runs should be the same
+        narrow_accumulators::<f32, 0>(&mut rand::thread_rng(), true);
+    }
+    //
+    /// Test for `narrow_accumulators()` in other cases
+    fn test_narrow_accumulators<const ILP: usize>() {
+        let rng = &mut rand::thread_rng();
+        for _ in 0..proptest_cases() {
+            assert!(narrow_accumulators::<f32, ILP>(rng, true)
+                .into_iter()
+                .all(|acc| (0.5..2.0).contains(&acc)));
+        }
+    }
+    //
+    #[test]
+    fn narrow_accumulators_1reg() {
+        test_narrow_accumulators::<1>();
+    }
+    //
+    #[test]
+    fn narrow_accumulators_2regs() {
+        test_narrow_accumulators::<2>();
+    }
+    //
+    #[test]
+    fn narrow_accumulators_3regs() {
+        test_narrow_accumulators::<3>();
+    }
+    //
+    #[test]
+    fn narrow_accumulators_4regs() {
+        test_narrow_accumulators::<4>();
+    }
+
+    /// Test for `normal_accumulators()` in the special case of an empty output
+    #[test]
+    fn normal_accumulators_0regs() {
+        // Shouldn't crash, all runs should be the same
+        normal_accumulators::<f32, 0>(&mut rand::thread_rng(), true);
+    }
+    //
+    /// Test for `normal_accumulators()` in other cases
+    fn test_normal_accumulators<const ILP: usize>() {
+        let rng = &mut rand::thread_rng();
+        for _ in 0..proptest_cases() {
+            assert!(normal_accumulators::<f32, ILP>(rng, true)
+                .into_iter()
+                .all(|acc| acc.is_normal()));
+        }
+    }
+    //
+    #[test]
+    fn normal_accumulators_1reg() {
+        test_normal_accumulators::<1>();
+    }
+    //
+    #[test]
+    fn normal_accumulators_2regs() {
+        test_normal_accumulators::<2>();
+    }
+    //
+    #[test]
+    fn normal_accumulators_3regs() {
+        test_normal_accumulators::<3>();
+    }
+    //
+    #[test]
+    fn normal_accumulators_4regs() {
+        test_normal_accumulators::<4>();
+    }
+
+    // TODO: Rest of the tests
+}
