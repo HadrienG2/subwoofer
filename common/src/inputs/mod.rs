@@ -180,15 +180,28 @@ pub mod test_utils {
         POSITIVE | NEGATIVE | NORMAL | SUBNORMAL | ZERO | INFINITE | QUIET_NAN
     }
 
-    /// Generate a array of f32s
+    /// Generate an arbitrary ordered f32 (excluding NaN)
+    #[cfg(test)]
+    pub(crate) fn ordered_f32() -> impl Strategy<Value = f32> {
+        use prop::num::f32::*;
+        POSITIVE | NEGATIVE | NORMAL | SUBNORMAL | ZERO | INFINITE
+    }
+
+    /// Generate a array of arbitrary f32s
     pub fn f32_array<const SIZE: usize>() -> impl Strategy<Value = [f32; SIZE]> {
         std::array::from_fn(|_| any_f32())
     }
 
-    /// Generate a Vec of f32s
-    pub fn f32_vec(pairwise: bool) -> impl Strategy<Value = Vec<f32>> {
+    /// Generate a array of ordered f32s
+    #[cfg(test)]
+    pub(crate) fn ordered_f32_array<const SIZE: usize>() -> impl Strategy<Value = [f32; SIZE]> {
+        std::array::from_fn(|_| ordered_f32())
+    }
+
+    /// Pick the size of a Vec of f32s
+    fn f32_vec_size(pairwise: bool) -> impl Strategy<Value = usize> {
         let size_range = Range::from(SizeRange::default());
-        let size = if pairwise {
+        if pairwise {
             prop_oneof![
                 4 => {
                     ((size_range.start / 2)..(size_range.end / 2))
@@ -199,8 +212,18 @@ pub mod test_utils {
             .boxed()
         } else {
             size_range.boxed()
-        };
-        size.prop_flat_map(|size| prop::collection::vec(any_f32(), size))
+        }
+    }
+
+    /// Generate a Vec of arbitrary f32s
+    pub fn f32_vec(pairwise: bool) -> impl Strategy<Value = Vec<f32>> {
+        f32_vec_size(pairwise).prop_flat_map(|size| prop::collection::vec(any_f32(), size))
+    }
+
+    /// Generate a Vec of ordered f32s
+    #[cfg(test)]
+    pub(crate) fn ordered_f32_vec(pairwise: bool) -> impl Strategy<Value = Vec<f32>> {
+        f32_vec_size(pairwise).prop_flat_map(|size| prop::collection::vec(ordered_f32(), size))
     }
 }
 

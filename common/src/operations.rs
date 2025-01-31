@@ -199,16 +199,16 @@ pub fn integrate<
     T: FloatLike,
     I: Inputs<Element = T>,
     const ILP: usize,
-    const HIDE_INPUTS: bool,
+    const HIDE_REUSED_INPUTS: bool,
 >(
     accumulators: &mut [T; ILP],
     mut hide_accumulators: impl FnMut(&mut [T; ILP]),
     inputs: &mut I,
-    mut iter: impl Copy + FnMut(T, T) -> T,
+    mut iter: impl Clone + FnMut(T, T) -> T,
 ) {
     let inputs_slice = inputs.as_ref();
     if I::KIND.is_reused() {
-        if HIDE_INPUTS {
+        if HIDE_REUSED_INPUTS {
             // When we need to hide inputs, we flip the order of iteration over
             // inputs and accumulators so that each set of inputs is fully
             // processed before we switch accumulators.
@@ -258,12 +258,16 @@ pub fn integrate<
 /// This is useful for operations like `fma_addend` which treat inputs
 /// inhomogeneously and for operations like `fma_full` which require two inputs
 /// per elementary accumulation transaction.
+///
+/// # Panics
+///
+/// Panics if the input size is not a multiple of 2.
 #[inline]
 pub fn integrate_pairs<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
     accumulators: &mut [T; ILP],
     mut hide_accumulators: impl FnMut(&mut [T; ILP]),
     inputs: &I,
-    mut iter: impl Copy + FnMut(T, [T; 2]) -> T,
+    mut iter: impl Clone + FnMut(T, [T; 2]) -> T,
 ) {
     let inputs = inputs.as_ref();
     let inputs_len = inputs.len();
@@ -1031,10 +1035,11 @@ mod tests {
     use super::*;
     use crate::{
         arch::MIN_FLOAT_REGISTERS,
-        inputs::test_utils::{f32_array, f32_vec},
-        tests::proptest_cases,
+        inputs::test_utils::{f32_array, f32_vec, ordered_f32, ordered_f32_array, ordered_f32_vec},
+        tests::{assert_panics, proptest_cases},
     };
     use proptest::prelude::*;
+    use std::{cell::RefCell, panic::AssertUnwindSafe, rc::Rc};
 
     /// Generate a sensible degree of instruction-level parallelism
     fn ilp() -> impl Strategy<Value = usize> {
@@ -1148,5 +1153,375 @@ mod tests {
         test_normal_accumulators::<4>();
     }
 
-    // TODO: Rest of the tests
+    /// Test accumulator hiding with scalar and SIMD payloads
+    fn test_hide_accumulators<T: FloatLike, const ILP: usize>(
+        accumulators: [T; ILP],
+    ) -> Result<(), TestCaseError> {
+        let mut hidden = accumulators;
+        hide_accumulators::<T, ILP, false>(&mut hidden);
+        prop_assert_eq!(hidden, accumulators);
+        hide_accumulators::<T, ILP, true>(&mut hidden);
+        prop_assert_eq!(hidden, accumulators);
+        Ok(())
+    }
+    //
+    macro_rules! test_hide_accumulators {
+        ($t:ident, $generator:expr) => {
+            test_hide_accumulators!($t => mod $t, $generator);
+        };
+        ($t:ty => mod $name:ident, $generator:expr) => {
+            mod $name {
+                use super::*;
+
+                fn accumulators<const ILP: usize>() -> impl Strategy<Value = [$t; ILP]> {
+                    std::array::from_fn(|_| $generator)
+                }
+
+                #[test]
+                fn hide_0accumulators() {
+                    test_hide_accumulators::<f32, 0>([]).unwrap();
+                }
+
+                proptest! {
+                    #[test]
+                    fn hide_single_accumulator([acc] in accumulators::<1>()) {
+                        prop_assert_eq!(super::hide_single_accumulator(acc), acc);
+                        test_hide_accumulators([acc])?;
+                    }
+
+                    #[test]
+                    fn hide_2accumulators(accs in accumulators::<2>()) {
+                        test_hide_accumulators(accs)?;
+                    }
+
+                    #[test]
+                    fn hide_3accumulators(accs in accumulators::<3>()) {
+                        test_hide_accumulators(accs)?;
+                    }
+
+                    #[test]
+                    fn hide_4accumulators(accs in accumulators::<4>()) {
+                        test_hide_accumulators(accs)?;
+                    }
+                }
+            }
+        };
+    }
+    //
+    test_hide_accumulators!(f32, ordered_f32());
+    //
+    #[cfg(feature = "simd")]
+    mod simd {
+        use super::*;
+        use std::simd::{prelude::*, LaneCount, SupportedLaneCount};
+
+        /// Generate a bunch of SIMD accumulators for an accumulator hiding test
+        fn simd_accumulator<const WIDTH: usize>() -> impl Strategy<Value = Simd<f32, WIDTH>>
+        where
+            LaneCount<WIDTH>: SupportedLaneCount,
+        {
+            std::array::from_fn(|_| ordered_f32()).prop_map(Simd::from)
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        test_hide_accumulators!(Simd<f32, 4> => mod sse, simd_accumulator::<4>());
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx"))]
+        test_hide_accumulators!(Simd<f32, 8> => mod avx, simd_accumulator::<8>());
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        test_hide_accumulators!(Simd<f32, 16> => mod avx512, simd_accumulator::<16>());
+    }
+
+    // Test integrate() in a certain input configuration
+    fn test_integrate<I: Inputs<Element = f32>, const ILP: usize>(
+        mut inputs: I,
+    ) -> Result<(), TestCaseError> {
+        // Set up a test harness that records the sequence of iter() calls
+        let accs_init = std::array::from_fn(|idx| idx as f32);
+        let mut accumulators = accs_init;
+        //
+        let hide_accumulators = super::hide_accumulators::<f32, ILP, true>;
+        //
+        let initial_inputs = inputs.as_ref().to_owned();
+        //
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let iter = |acc, input| {
+            log.borrow_mut().push((acc, input));
+            acc
+        };
+
+        // Check the sequence of iter() calls against expectations
+        let check_log = |reused_inputs_hidden| {
+            if I::KIND.is_reused() {
+                if reused_inputs_hidden {
+                    let expected_log = accs_init
+                        .into_iter()
+                        .flat_map(|acc| initial_inputs.iter().map(move |&input| (acc, input)));
+                    prop_assert!(log.borrow().iter().copied().eq(expected_log));
+                } else {
+                    let expected_log = initial_inputs
+                        .iter()
+                        .flat_map(|&input| accs_init.into_iter().map(move |acc| (acc, input)));
+                    prop_assert!(log.borrow().iter().copied().eq(expected_log));
+                }
+            } else {
+                let expected_log = std::iter::repeat(accs_init)
+                    .flatten()
+                    .zip(initial_inputs.iter().copied());
+                prop_assert!(log.borrow().iter().copied().eq(expected_log));
+            }
+            Ok(())
+        };
+
+        // Test without reused input hiding
+        integrate::<f32, I, ILP, false>(&mut accumulators, hide_accumulators, &mut inputs, iter);
+        prop_assert_eq!(accumulators, accs_init);
+        prop_assert_eq!(inputs.as_ref(), &initial_inputs);
+        check_log(false)?;
+        log.borrow_mut().clear();
+
+        // Test with reused input hiding
+        integrate::<f32, I, ILP, true>(&mut accumulators, hide_accumulators, &mut inputs, iter);
+        prop_assert_eq!(accumulators, accs_init);
+        prop_assert_eq!(inputs.as_ref(), &initial_inputs);
+        check_log(true)?;
+        Ok(())
+    }
+    //
+    #[test]
+    fn integrate_0regs_ilp1() {
+        test_integrate::<_, 1>([]).unwrap();
+    }
+    //
+    #[test]
+    fn integrate_0regs_ilp2() {
+        test_integrate::<_, 2>([]).unwrap();
+    }
+    //
+    #[test]
+    fn integrate_0regs_ilp3() {
+        test_integrate::<_, 3>([]).unwrap();
+    }
+    //
+    proptest! {
+        #[test]
+        fn integrate_1reg_ilp1(input in ordered_f32_array::<1>()) {
+            test_integrate::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_1reg_ilp2(input in ordered_f32_array::<1>()) {
+            test_integrate::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_1reg_ilp3(input in ordered_f32_array::<1>()) {
+            test_integrate::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_2regs_ilp1(input in ordered_f32_array::<2>()) {
+            test_integrate::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_2regs_ilp2(input in ordered_f32_array::<2>()) {
+            test_integrate::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_2regs_ilp3(input in ordered_f32_array::<2>()) {
+            test_integrate::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_3regs_ilp1(input in ordered_f32_array::<3>()) {
+            test_integrate::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_3regs_ilp2(input in ordered_f32_array::<3>()) {
+            test_integrate::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_3regs_ilp3(input in ordered_f32_array::<3>()) {
+            test_integrate::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_4regs_ilp1(input in ordered_f32_array::<4>()) {
+            test_integrate::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_4regs_ilp2(input in ordered_f32_array::<4>()) {
+            test_integrate::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_4regs_ilp3(input in ordered_f32_array::<4>()) {
+            test_integrate::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_mem_ilp1(mut input in ordered_f32_vec(false)) {
+            test_integrate::<_, 1>(&mut input[..])?;
+        }
+
+        #[test]
+        fn integrate_mem_ilp2(mut input in ordered_f32_vec(false)) {
+            test_integrate::<_, 2>(&mut input[..])?;
+        }
+
+        #[test]
+        fn integrate_mem_ilp3(mut input in ordered_f32_vec(false)) {
+            test_integrate::<_, 3>(&mut input[..])?;
+        }
+    }
+
+    // Test integrate_pairs() in a certain input configuration
+    fn test_integrate_pairs<I: Inputs<Element = f32>, const ILP: usize>(
+        inputs: I,
+    ) -> Result<(), TestCaseError> {
+        // Set up a test harness that records the sequence of iter() calls
+        let accs_init = std::array::from_fn(|idx| idx as f32);
+        let mut accumulators = accs_init;
+        //
+        let hide_accumulators = super::hide_accumulators::<f32, ILP, true>;
+        //
+        let input_slice = inputs.as_ref();
+        let initial_inputs = input_slice.to_owned();
+        //
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let iter = |acc, inputs| {
+            log.borrow_mut().push((acc, inputs));
+            acc
+        };
+
+        // Test without reused input hiding
+        let integrate_pairs = super::integrate_pairs::<f32, I, ILP>;
+        if initial_inputs.len() % 2 != 0 {
+            return assert_panics(AssertUnwindSafe(|| {
+                integrate_pairs(&mut accumulators, hide_accumulators, &inputs, iter)
+            }));
+        } else {
+            integrate_pairs(&mut accumulators, hide_accumulators, &inputs, iter)
+        }
+        prop_assert_eq!(accumulators, accs_init);
+
+        // Check iter() log against expectations
+        let input_len = initial_inputs.len();
+        let (left, right) = initial_inputs.split_at(input_len / 2);
+        let input_pairs = left
+            .iter()
+            .zip(right.iter())
+            .map(|(&x, &y)| [x, y])
+            .collect::<Vec<_>>();
+        if I::KIND.is_reused() {
+            let expected_log = input_pairs
+                .iter()
+                .flat_map(|&input_pair| accs_init.into_iter().map(move |acc| (acc, input_pair)));
+            prop_assert!(log.borrow().iter().copied().eq(expected_log));
+        } else {
+            let expected_log = std::iter::repeat(accs_init)
+                .flatten()
+                .zip(input_pairs.iter().copied());
+            prop_assert!(log.borrow().iter().copied().eq(expected_log));
+        }
+        Ok(())
+    }
+    //
+    #[test]
+    fn integrate_pairs_0regs_ilp1() {
+        test_integrate_pairs::<_, 1>([]).unwrap();
+    }
+    //
+    #[test]
+    fn integrate_pairs_0regs_ilp2() {
+        test_integrate_pairs::<_, 2>([]).unwrap();
+    }
+    //
+    #[test]
+    fn integrate_pairs_0regs_ilp3() {
+        test_integrate_pairs::<_, 3>([]).unwrap();
+    }
+    //
+    proptest! {
+        #[test]
+        fn integrate_pairs_1reg_ilp1(input in ordered_f32_array::<1>()) {
+            test_integrate_pairs::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_1reg_ilp2(input in ordered_f32_array::<1>()) {
+            test_integrate_pairs::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_1reg_ilp3(input in ordered_f32_array::<1>()) {
+            test_integrate_pairs::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_2regs_ilp1(input in ordered_f32_array::<2>()) {
+            test_integrate_pairs::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_2regs_ilp2(input in ordered_f32_array::<2>()) {
+            test_integrate_pairs::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_2regs_ilp3(input in ordered_f32_array::<2>()) {
+            test_integrate_pairs::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_3regs_ilp1(input in ordered_f32_array::<3>()) {
+            test_integrate_pairs::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_3regs_ilp2(input in ordered_f32_array::<3>()) {
+            test_integrate_pairs::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_3regs_ilp3(input in ordered_f32_array::<3>()) {
+            test_integrate_pairs::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_4regs_ilp1(input in ordered_f32_array::<4>()) {
+            test_integrate_pairs::<_, 1>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_4regs_ilp2(input in ordered_f32_array::<4>()) {
+            test_integrate_pairs::<_, 2>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_4regs_ilp3(input in ordered_f32_array::<4>()) {
+            test_integrate_pairs::<_, 3>(input)?;
+        }
+
+        #[test]
+        fn integrate_pairs_mem_ilp1(input in ordered_f32_vec(true)) {
+            test_integrate_pairs::<_, 1>(&input[..])?;
+        }
+
+        #[test]
+        fn integrate_pairs_mem_ilp2(input in ordered_f32_vec(true)) {
+            test_integrate_pairs::<_, 2>(&input[..])?;
+        }
+
+        #[test]
+        fn integrate_pairs_mem_ilp3(input in ordered_f32_vec(true)) {
+            test_integrate_pairs::<_, 3>(&input[..])?;
+        }
+    }
 }
