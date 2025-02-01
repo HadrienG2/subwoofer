@@ -14,7 +14,7 @@ Benchmarks names folow a `type/op/ilp/source/%subnormals` structure where...
       this chapter.
 - `ilp` is the degree of instruction-level parallelism that is present in the
   benchmark.
-    * "chained" corresponds to the ILP=1 special case, which is always
+    * "chained" corresponds to the ILP=1 special case, which is maximally
       latency-bound. Higher ILP should increase execution performance until the
       code becomes throughput bound and saturates superscalar CPU backend
       resources, but the highest ILP configurations may not be optimal due to

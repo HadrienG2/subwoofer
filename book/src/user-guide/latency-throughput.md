@@ -40,9 +40,9 @@ number of identical instruction streams where the output of each operation is
 the input of the next one.
 
 - In the `chained` configurations, there is only one instruction stream, so we
-  expect latency-bound performance. The execution time for a chain of N
-  operations should therefore be N times the execution latency of an individual
-  operation.
+  expect maximally latency-bound performance. The execution time for a chain of
+  N operations should therefore be N times the execution latency of an
+  individual operation.
 - In one of the configurations of higher Instruction-Level Parallelism (ILP),
   which is normally close to the maximum ILP that is allowed by the CPU ISA,
   maximal performance will be observed. At this throughput-bound limit,
