@@ -145,6 +145,23 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaAddendRun<Storage, I
     }
 }
 
+/// Generate an input dataset
+fn generate_inputs<Storage: InputsMut, const ILP: usize>(
+    num_subnormals: usize,
+    input_storage: &mut Storage,
+    rng: &mut impl Rng,
+    inside_test: bool,
+    multiplier: Storage::Element,
+) {
+    generate_input_pairs::<_, _, ILP>(
+        num_subnormals,
+        input_storage,
+        rng,
+        inside_test,
+        FmaAddendGenerator::new(multiplier),
+    )
+}
+
 /// Global state of the input generator
 struct FmaAddendGenerator<T: FloatLike> {
     /// Initial multiplier of the FMA cycle
@@ -319,23 +336,6 @@ impl<T: FloatLike, R: Rng> GeneratorStream<R> for FmaAddendStream<'_, T> {
     }
 }
 
-/// Generate an input dataset
-fn generate_inputs<I: InputsMut, const ILP: usize>(
-    num_subnormals: usize,
-    input_storage: &mut I,
-    rng: &mut impl Rng,
-    inside_test: bool,
-    multiplier: I::Element,
-) {
-    generate_input_pairs::<_, _, ILP>(
-        num_subnormals,
-        input_storage,
-        rng,
-        inside_test,
-        FmaAddendGenerator::new(multiplier),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +347,7 @@ mod tests {
         operations::test_utils::NeedsNarrowAcc,
         test_utils::assert_panics,
     };
+    use itertools::Itertools;
     use proptest::prelude::*;
     use rand::rngs::ThreadRng;
     use std::panic::AssertUnwindSafe;
@@ -360,7 +361,7 @@ mod tests {
         /// Test [`FmaAddendGenerator`] and [`FmaAddendStream`]
         #[test]
         fn fma_addend_generator(
-            (stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals(),
+            (stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals(true),
             multiplier in multiplier(),
         ) {
             // Set up an input generator
@@ -380,7 +381,11 @@ mod tests {
             prop_assert_eq!(&stream.state, &FmaAddendState::Unconstrained);
 
             // Simulate the creation of a dataset, checking behavior
-            let stream_indices = (0..target.len()).skip(stream_idx).step_by(num_streams);
+            debug_assert_eq!(target.len() % 2, 0);
+            let half_len = target.len() / 2;
+            let stream_indices =
+                ((0..half_len).skip(stream_idx).step_by(num_streams))
+                    .interleave((half_len..target.len()).skip(stream_idx).step_by(num_streams));
             for (elem_idx, is_subnormal) in stream_indices.clone().zip(subnormals) {
                 let initial_state = stream.state.clone();
                 let initial_multiplier = stream.next_multiplier;
@@ -596,6 +601,6 @@ mod tests {
         }
     }
 
-    // Test the Operation implementation
+    // Test the `Operation` implementation
     common::test_pairwise_operation!(FmaAddend, NeedsNarrowAcc::Always, 1, 30.0 * f32::EPSILON);
 }

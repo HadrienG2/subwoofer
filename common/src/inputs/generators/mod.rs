@@ -486,15 +486,30 @@ pub mod test_utils {
     }
 
     /// Inputs for [`GeneratorStream`] implementation tests
-    pub fn stream_target_subnormals() -> impl Strategy<Value = (usize, usize, Vec<f32>, Vec<bool>)>
-    {
-        num_streams_and_target(false).prop_flat_map(|(num_streams, target)| {
-            let target_len = target.len();
-            (
-                0..num_streams,
-                Just(num_streams),
-                Just(target),
-                prop::collection::vec(any::<bool>(), target_len.div_ceil(num_streams)),
+    pub fn stream_target_subnormals(
+        pairwise: bool,
+    ) -> impl Strategy<Value = (usize, usize, Vec<f32>, Vec<bool>)> {
+        num_streams_and_target(pairwise).prop_flat_map(move |(num_streams, target)| {
+            (Just(num_streams), Just(target), 0..num_streams).prop_flat_map(
+                move |(num_streams, target, stream_idx)| {
+                    let target_len = target.len();
+                    let stream_len = |sequence_len: usize| {
+                        sequence_len / num_streams
+                            + (stream_idx < (sequence_len % num_streams)) as usize
+                    };
+                    let stream_len = if pairwise {
+                        assert_eq!(target_len % 2, 0);
+                        stream_len(target_len / 2) * 2
+                    } else {
+                        stream_len(target_len)
+                    };
+                    (
+                        Just(stream_idx),
+                        Just(num_streams),
+                        Just(target),
+                        prop::collection::vec(any::<bool>(), stream_len),
+                    )
+                },
             )
         })
     }

@@ -17,6 +17,8 @@ rand.workspace = true
 
 [dev-dependencies]
 common = { workspace = true, features = ["unstable_test"] }
+itertools.workspace = true
+proptest.workspace = true
 
 [lib]
 bench = false

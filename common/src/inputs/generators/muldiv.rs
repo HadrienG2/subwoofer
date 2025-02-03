@@ -438,7 +438,7 @@ mod tests {
     proptest! {
         /// Test [`MulDivStream`]
         #[test]
-        fn mul_div_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals()) {
+        fn mul_div_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals(false)) {
             // Determine how many normal/subnormal numbers we expect to generate
             // and how many times we expect each callback to be called
             let mut expected_normal_outputs = 0;

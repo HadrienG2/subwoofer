@@ -113,7 +113,7 @@ mod tests {
     proptest! {
         /// Test [`AddStream`]
         #[test]
-        fn add_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals()) {
+        fn add_stream((stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals(false)) {
             // Set up a mock environment
             let rng = &mut rand::thread_rng();
             let [num_narrow, num_subnormal] = num_normals_subnormals(&subnormals);

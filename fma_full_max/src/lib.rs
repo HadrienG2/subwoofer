@@ -1,3 +1,5 @@
+use std::ops::Not;
+
 use common::{
     arch::HAS_MEMORY_OPERANDS,
     floats::{self, suggested_extremal_bias, FloatLike},
@@ -61,13 +63,12 @@ impl<Storage: InputsMut, const ILP: usize> Benchmark for FmaFullMaxBenchmark<Sto
 
     #[inline]
     fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
-        generate_input_pairs::<_, _, ILP>(
+        generate_inputs::<ILP>(
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
             &mut self.input_storage,
             rng,
             inside_test,
-            FmaFullMaxGenerator { inside_test },
         );
         FmaFullMaxRun {
             inputs: self.input_storage.freeze(),
@@ -126,6 +127,21 @@ fn lower_bound<T: FloatLike>() -> T {
     T::splat(0.25)
 }
 
+fn generate_inputs<const ILP: usize>(
+    num_subnormals: usize,
+    input_storage: &mut impl InputsMut,
+    rng: &mut impl Rng,
+    inside_test: bool,
+) {
+    generate_input_pairs::<_, _, ILP>(
+        num_subnormals,
+        input_storage,
+        rng,
+        inside_test,
+        FmaFullMaxGenerator { inside_test },
+    )
+}
+
 /// Global state of the input generator
 struct FmaFullMaxGenerator {
     /// Truth that we are generating data for a unit test
@@ -148,6 +164,7 @@ impl<F: FloatLike, R: Rng> InputGenerator<F, R> for FmaFullMaxGenerator {
 }
 
 /// Per-stream state of the input generator
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct FmaFullMaxStream<T: FloatLike> {
     /// Truth that we are generating data for a unit test
     inside_test: bool,
@@ -168,7 +185,14 @@ enum ValueRole {
 //
 impl ValueRole {
     fn flip(&mut self) {
-        *self = match *self {
+        *self = !*self;
+    }
+}
+//
+impl Not for ValueRole {
+    type Output = Self;
+    fn not(self) -> Self {
+        match self {
             Self::Multiplier => Self::Addend,
             Self::Addend => Self::Multiplier,
         }
@@ -450,6 +474,208 @@ fn lower_recovery_multiplier<T: FloatLike>(rng: &mut impl Rng, inside_test: bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::operations::test_utils::NeedsNarrowAcc;
+    use common::{
+        floats::{self, test_utils::suggested_extremal_bias},
+        inputs::generators::test_utils::{num_normals_subnormals, stream_target_subnormals},
+        operations::test_utils::NeedsNarrowAcc,
+    };
+    use itertools::Itertools;
+    use proptest::prelude::*;
+    use rand::rngs::ThreadRng;
+
+    proptest! {
+        /// Test [`FmaFullMaxGenerator`] and [`FmaFullMaxStream`]
+        #[test]
+        fn fma_full_max_generator(
+            (stream_idx, num_streams, mut target, subnormals) in stream_target_subnormals(true),
+        ) {
+            // Set up an input generator
+            let generator = FmaFullMaxGenerator { inside_test: true };
+
+            // Set up a mock data stream
+            let rng = &mut rand::thread_rng();
+            let [num_narrow, num_subnormal] = num_normals_subnormals(&subnormals);
+            let mut narrow = floats::narrow_sampler(suggested_extremal_bias(num_narrow));
+            let subnormal = floats::subnormal_sampler(suggested_extremal_bias(num_subnormal));
+            let mut stream = <FmaFullMaxGenerator as InputGenerator<f32, ThreadRng>>::new_stream(&generator);
+            prop_assert_eq!(stream.inside_test, generator.inside_test);
+            prop_assert_eq!(stream.next_role, ValueRole::Multiplier);
+            prop_assert_eq!(&stream.state, &FmaFullMaxState::Narrow);
+
+            // Simulate the creation of a dataset, checking behavior
+            debug_assert_eq!(target.len() % 2, 0);
+            let half_len = target.len() / 2;
+            let stream_indices =
+                ((0..half_len).skip(stream_idx).step_by(num_streams))
+                    .interleave((half_len..target.len()).skip(stream_idx).step_by(num_streams));
+            for (elem_idx, is_subnormal) in stream_indices.zip(subnormals) {
+                let initial_state = stream.state;
+                let initial_role = stream.next_role;
+                let expected_next_role = !initial_role;
+                let new_value = if is_subnormal {
+                    <FmaFullMaxStream<_> as GeneratorStream<ThreadRng>>::record_subnormal(&mut stream);
+                    match initial_role {
+                        ValueRole::Multiplier => prop_assert_eq!(&stream.state, &FmaFullMaxState::Subnormal),
+                        ValueRole::Addend => if initial_state == FmaFullMaxState::Subnormal {
+                            prop_assert_eq!(&stream.state, &FmaFullMaxState::LowerBound)
+                        } else {
+                            prop_assert_eq!(&stream.state, &initial_state)
+                        },
+                    }
+                    subnormal(rng)
+                } else {
+                    let output: f32 = stream.generate_normal(elem_idx, rng, &mut narrow);
+                    match initial_role {
+                        ValueRole::Multiplier => {
+                            match (&initial_state, &stream.state) {
+                                (FmaFullMaxState::Narrow, FmaFullMaxState::NarrowProduct { global_idx, factor }) => {
+                                    prop_assert_eq!(*global_idx, elem_idx);
+                                    prop_assert!(*factor >= 0.5);
+                                    prop_assert!(*factor < 2.0);
+                                    prop_assert_eq!(output, *factor);
+                                }
+                                (FmaFullMaxState::NarrowProduct { global_idx: _, factor }, FmaFullMaxState::Narrow) => {
+                                    prop_assert_eq!(output, 1.0 / factor);
+                                }
+                                (FmaFullMaxState::NarrowSum { .. }, FmaFullMaxState::NarrowSum { .. }) => {
+                                    prop_assert_eq!(&initial_state, &stream.state);
+                                    prop_assert_eq!(output, 1.0);
+                                }
+                                (FmaFullMaxState::LowerBound, FmaFullMaxState::Narrow) => {
+                                    let expected_acc = lower_bound::<f32>() * output;
+                                    prop_assert!(expected_acc >= 0.5);
+                                    prop_assert!(expected_acc < 2.0);
+                                }
+                                (from, to) => {
+                                    return Err(TestCaseError::fail(
+                                        format!("Did not expect a multiplicative stream state transition from {from:?} to {to:?}")
+                                    ));
+                                }
+                            }
+                        }
+                        ValueRole::Addend => {
+                            match (&initial_state, &stream.state) {
+                                (FmaFullMaxState::Narrow, FmaFullMaxState::NarrowSum { global_idx, addend }) => {
+                                    prop_assert_eq!(*global_idx, elem_idx);
+                                    prop_assert!(*addend >= 0.5);
+                                    prop_assert!(*addend < 2.0);
+                                    prop_assert_eq!(output, *addend);
+                                }
+                                (FmaFullMaxState::NarrowProduct { .. }, FmaFullMaxState::NarrowProduct { .. }) => {
+                                    prop_assert_eq!(&initial_state, &stream.state);
+                                    prop_assert_eq!(output, 0.0);
+                                }
+                                (FmaFullMaxState::NarrowSum { global_idx: _, addend }, FmaFullMaxState::Narrow) => {
+                                    prop_assert_eq!(output, -addend);
+                                }
+                                (FmaFullMaxState::Subnormal, FmaFullMaxState::Narrow) => {
+                                    prop_assert!(output >= 0.5);
+                                    prop_assert!(output < 2.0);
+                                }
+                                (from, to) => {
+                                    return Err(TestCaseError::fail(
+                                        format!("Did not expect an additive stream state transition from {from:?} to {to:?}")
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    output
+                };
+                prop_assert_eq!(stream.next_role, expected_next_role);
+                target[elem_idx] = new_value;
+            }
+
+            // Determine the expected final output
+            prop_assert_eq!(stream.next_role, ValueRole::Multiplier);
+            let mut expected = target.clone();
+            let mut last_pair_cancels_subnormal = false;
+            'fixup: {
+                match &stream.state {
+                    FmaFullMaxState::Narrow => {}
+                    FmaFullMaxState::NarrowProduct { global_idx, .. } => expected[*global_idx] = 1.0,
+                    FmaFullMaxState::NarrowSum { global_idx, .. } => expected[*global_idx] = 0.0,
+                    FmaFullMaxState::LowerBound => {
+                        // An abnormal accumulator magnitude is only a problem
+                        // if the sequence starts with a normal multiplier.
+                        let mut pairs = DataStream::new(&mut expected, stream_idx, num_streams).into_pair_iter();
+                        let [first_multiplier, first_addend] = pairs.next().unwrap();
+                        if first_multiplier.is_subnormal() {
+                            break 'fixup;
+                        }
+                        prop_assert!(first_multiplier.is_normal());
+
+                        // Otherwise, extract up the last subnormal (addend,
+                        // multiplier) pair...
+                        let [last_multiplier, last_addend] = pairs.next_back().unwrap();
+                        prop_assert!(last_multiplier.is_subnormal());
+                        prop_assert!(last_addend.is_subnormal());
+
+                        // ...and swap it with the first pair before it that is
+                        // not all-subnormal
+                        let [prev_multiplier, prev_addend] = pairs
+                            .rev()
+                            .chain(std::iter::once([first_multiplier, first_addend]))
+                            .find(|[mul, add]| mul.is_normal() || add.is_normal())
+                            .unwrap();
+                        std::mem::swap(last_multiplier, prev_multiplier);
+                        std::mem::swap(last_addend, prev_addend);
+
+                        // We'll later see how their magnitude has been fixed up
+                        last_pair_cancels_subnormal = true;
+                    },
+                    FmaFullMaxState::Subnormal => unreachable!("Last MAX should have taken us out of this state"),
+                };
+            };
+
+            // Compute the final output after a state backup
+            <FmaFullMaxStream<_> as GeneratorStream<ThreadRng>>::finalize(
+                stream,
+                DataStream::new(&mut target, stream_idx, num_streams),
+                rng,
+            );
+
+            // Check that we get the expected final state
+            if last_pair_cancels_subnormal {
+                fn last_pair_from_stream(slice: &mut [f32], stream_idx: usize, num_streams: usize) -> [&mut f32; 2] {
+                    DataStream::new(slice, stream_idx, num_streams).into_pair_iter().last().unwrap()
+                }
+                let [last_multiplier, last_addend] = last_pair_from_stream(&mut target, stream_idx, num_streams);
+                let [expected_multiplier, expected_addend] = last_pair_from_stream(&mut expected, stream_idx, num_streams);
+                prop_assert_eq!(last_multiplier.is_normal(), expected_multiplier.is_normal());
+                prop_assert_eq!(last_multiplier.is_subnormal(), expected_multiplier.is_subnormal());
+                prop_assert_eq!(last_addend.is_subnormal(), expected_addend.is_subnormal());
+                match [last_multiplier.is_normal(), last_addend.is_normal()] {
+                    [true, false] | [true, true] => {
+                        let final_acc = lower_bound::<f32>() * *last_multiplier;
+                        prop_assert!(final_acc >= 0.5);
+                        prop_assert!(final_acc < 2.0);
+                        *expected_multiplier = *last_multiplier;
+                        if expected_addend.is_normal() {
+                            prop_assert_eq!(*last_addend, 0.0);
+                        } else {
+                            prop_assert_eq!(*last_addend, *expected_addend);
+                        }
+                        *expected_addend = *last_addend;
+                    }
+                    [false, true] => {
+                        prop_assert_eq!(*last_multiplier, *expected_multiplier);
+                        prop_assert!(*last_addend >= 0.5);
+                        prop_assert!(*last_addend < 2.0);
+                        *expected_addend = *last_addend;
+                    }
+                    [false, false] => unreachable!("finalize() should have taken us out of this state"),
+                }
+            }
+            prop_assert!(
+                target.into_iter().map(f32::to_bits)
+                .eq(expected.into_iter().map(f32::to_bits))
+            );
+        }
+    }
+
+    // TODO: Test `generate_inputs()`
+
+    // Test the `Operation` implementation
     common::test_pairwise_operation!(FmaFullMax, NeedsNarrowAcc::FirstNormal, 2);
 }
