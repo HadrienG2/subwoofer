@@ -283,7 +283,6 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
     let mut actual_subnormals = 0;
     let mut expected_state: [MulDivState<f32>; ILP] =
         std::array::from_fn(|_| MulDivState::Unconstrained);
-    let mut should_be_end = [false; ILP];
     let error_context = |chunk_idx: usize, acc_idx| {
         format!(
             "\n\
@@ -299,9 +298,8 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
         )
     };
     for (chunk_idx, chunk) in target.chunks(ILP).enumerate() {
-        for (((acc_idx, &elem), acc), (expected_state, should_be_end)) in (chunk.iter().enumerate())
-            .zip(&mut accs)
-            .zip(expected_state.iter_mut().zip(&mut should_be_end))
+        for ((acc_idx, &elem), (acc, expected_state)) in
+            (chunk.iter().enumerate()).zip(accs.iter_mut().zip(&mut expected_state))
         {
             let acc_before = *acc;
             let acc_after = integrate(*acc, elem);
@@ -314,17 +312,8 @@ pub fn test_generate_muldiv_inputs<const ILP: usize>(
             if elem.is_subnormal() {
                 actual_subnormals += 1;
                 *expected_state = MulDivState::CancelSubnormal;
-            } else if elem == 1.0 {
-                prop_assert_eq!(
-                    expected_state,
-                    &MulDivState::Unconstrained,
-                    "{}",
-                    error_context()
-                );
-                *should_be_end = true;
             } else {
                 prop_assert!(elem.is_normal());
-                prop_assert!(!*should_be_end);
                 let expect_narrow_acc = || {
                     prop_assert!(
                         acc_range.contains(&acc_after),

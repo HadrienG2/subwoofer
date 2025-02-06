@@ -476,12 +476,16 @@ mod tests {
     use super::*;
     use common::{
         floats::{self, test_utils::suggested_extremal_bias},
-        inputs::generators::test_utils::{num_normals_subnormals, stream_target_subnormals},
+        inputs::generators::test_utils::{
+            num_normals_subnormals, stream_target_subnormals, target_and_num_subnormals,
+        },
         operations::test_utils::NeedsNarrowAcc,
+        test_utils::assert_panics,
     };
     use itertools::Itertools;
     use proptest::prelude::*;
     use rand::rngs::ThreadRng;
+    use std::panic::AssertUnwindSafe;
 
     proptest! {
         /// Test [`FmaFullMaxGenerator`] and [`FmaFullMaxStream`]
@@ -674,7 +678,255 @@ mod tests {
         }
     }
 
-    // TODO: Test `generate_inputs()`
+    /// Test [`generate_inputs()`]
+    fn test_generate_inputs<const ILP: usize>(
+        mut target: &mut [f32],
+        num_subnormals: usize,
+    ) -> Result<(), TestCaseError> {
+        // Tolerance of the final check that the accumulator stayed in narrow range
+        const NARROW_ACC_TOLERANCE: f32 = 10.0 * f32::EPSILON;
+        let acc_range = (0.5 - NARROW_ACC_TOLERANCE)..=(2.0 + NARROW_ACC_TOLERANCE);
+
+        // Generate the inputs
+        let mut rng = rand::thread_rng();
+        let target_len = target.len();
+        if num_subnormals > target_len || target_len % 2 != 0 {
+            return assert_panics(AssertUnwindSafe(|| {
+                generate_inputs::<ILP>(num_subnormals, &mut target, &mut rng, true);
+            }));
+        }
+        generate_inputs::<ILP>(num_subnormals, &mut target, &mut rng, true);
+
+        // Set up narrow accumulators
+        let accs_init = operations::narrow_accumulators::<f32, ILP>(&mut rng, true);
+
+        // Split the input for pairwise iteration
+        let half_len = target_len / 2;
+        let (left, right) = target.split_at(half_len);
+        let left_chunks = left.chunks(ILP);
+        let right_chunks = right.chunks(ILP);
+
+        // Check the result and simulate its effect on narrow accumulators
+        let lower_bound = lower_bound::<f32>();
+        let mut actual_subnormals = 0;
+        let mut accs = accs_init;
+        let mut expected_state: [FmaFullMaxState<f32>; ILP] = [FmaFullMaxState::Narrow; ILP];
+        let error_context = |chunk_idx: usize, acc_idx| {
+            fn acc_inputs<const ILP: usize>(
+                half: &[f32],
+                chunk_idx: usize,
+                acc_idx: usize,
+            ) -> impl Iterator<Item = f32> + '_ {
+                half.iter()
+                    .copied()
+                    .skip(acc_idx)
+                    .step_by(ILP)
+                    .take(chunk_idx)
+            }
+            format!(
+                "\n\
+                * Starting from initial accumulator {:?}\n\
+                * After integrating input(s) {:?}\n",
+                accs_init[acc_idx],
+                acc_inputs::<ILP>(left, chunk_idx, acc_idx)
+                    .zip(acc_inputs::<ILP>(right, chunk_idx, acc_idx))
+                    .collect::<Vec<_>>()
+            )
+        };
+        for (chunk_idx, (left_chunk, right_chunk)) in left_chunks.zip(right_chunks).enumerate() {
+            for (((&factor, &addend), (acc_idx, acc)), expected_state) in
+                (left_chunk.iter().zip(right_chunk.iter()))
+                    .zip(accs.iter_mut().enumerate())
+                    .zip(&mut expected_state)
+            {
+                // Common infrastructure
+                let acc_before = *acc;
+                let state_before = *expected_state;
+                let acc_product = acc_before * factor;
+                let acc_after = acc_before.mul_add(factor, addend).fast_max(lower_bound);
+                let error_context = || {
+                    format!(
+                        "{}* While integrating next inputs ({factor}, {addend}) into accumulator {acc_before} (expected state {state_before:?}), with results {acc_product} -> {acc_after}\n",
+                        error_context(chunk_idx, acc_idx)
+                    )
+                };
+                let expect_narrow_acc = |name: &str, acc_after| {
+                    prop_assert!(
+                            acc_range.contains(&acc_after),
+                            "{}* {name} value {acc_after} escaped narrow range [0.5; 2] by more than tolerance {NARROW_ACC_TOLERANCE}",
+                            error_context()
+                        );
+                    Ok(())
+                };
+
+                // Check factor
+                if factor.is_subnormal() {
+                    actual_subnormals += 1;
+                    *expected_state = FmaFullMaxState::Subnormal;
+                } else {
+                    prop_assert!(factor.is_normal());
+                    let expect_narrow_acc = || expect_narrow_acc("Product", acc_product);
+                    *expected_state = match *expected_state {
+                        FmaFullMaxState::Narrow => {
+                            prop_assert!(
+                                (0.5..=2.0).contains(&factor),
+                                "{}* Expected a factor in narrow range [0.5; 2] but got {factor}",
+                                error_context()
+                            );
+                            FmaFullMaxState::NarrowProduct {
+                                factor,
+                                global_idx: chunk_idx * ILP + acc_idx,
+                            }
+                        }
+                        FmaFullMaxState::NarrowProduct {
+                            factor: inverted, ..
+                        } => {
+                            let inverse = 1.0 / inverted;
+                            prop_assert_eq!(
+                                factor,
+                                inverse,
+                                "{}* Expected factor {} that's the inverse of the previous factor {}, but got {}",
+                                error_context(),
+                                inverse,
+                                inverted,
+                                factor
+                            );
+                            expect_narrow_acc()?;
+                            FmaFullMaxState::Narrow
+                        }
+                        FmaFullMaxState::NarrowSum { .. } => {
+                            prop_assert_eq!(
+                                factor,
+                                1.0,
+                                "{}* Expected factor 1x to avoid changing sum, but got {}",
+                                error_context(),
+                                factor
+                            );
+                            *expected_state
+                        }
+                        FmaFullMaxState::LowerBound => {
+                            let min = 0.5 / lower_bound;
+                            let max = 2.0 / lower_bound;
+                            prop_assert!(
+                                (min..=max).contains(&factor),
+                                "{}* Expected a factor in subnormal recovery range [{min}; {max}] but got {factor}", error_context()
+                            );
+                            expect_narrow_acc()?;
+                            FmaFullMaxState::Narrow
+                        }
+                        FmaFullMaxState::Subnormal => unreachable!(),
+                    };
+                }
+
+                // Check addend
+                if addend.is_subnormal() {
+                    actual_subnormals += 1;
+                    *expected_state = if *expected_state == FmaFullMaxState::Subnormal {
+                        FmaFullMaxState::LowerBound
+                    } else {
+                        *expected_state
+                    }
+                } else {
+                    prop_assert!(addend.is_normal() || addend == 0.0);
+                    let expect_narrow_acc = || expect_narrow_acc("New accumulator", acc_after);
+                    *expected_state = match *expected_state {
+                        FmaFullMaxState::Narrow => {
+                            prop_assert!(
+                                (0.5..=2.0).contains(&addend) || addend == 0.0,
+                                "{}* Expected an addend in narrow range [0.5; 2] or 0 but got {addend}",
+                                error_context()
+                            );
+                            FmaFullMaxState::NarrowSum {
+                                addend,
+                                global_idx: half_len + chunk_idx * ILP + acc_idx,
+                            }
+                        }
+                        FmaFullMaxState::NarrowProduct { .. } => {
+                            prop_assert_eq!(
+                                addend,
+                                0.0,
+                                "{}* Expected addend 0 to avoid changing product, but got {}",
+                                error_context(),
+                                addend
+                            );
+                            *expected_state
+                        }
+                        FmaFullMaxState::NarrowSum {
+                            addend: negated, ..
+                        } => {
+                            let opposite = -negated;
+                            prop_assert_eq!(
+                                addend,
+                                opposite,
+                                "{}* Expected addend {} that's the opposite of previous addend {}, but got {}",
+                                error_context(),
+                                opposite,
+                                negated,
+                                addend
+                            );
+                            expect_narrow_acc()?;
+                            FmaFullMaxState::Narrow
+                        }
+                        FmaFullMaxState::Subnormal => {
+                            prop_assert!(
+                                (0.5..=2.0).contains(&addend),
+                                "{}* Expected an addend in narrow range [0.5; 2] but got {addend}",
+                                error_context()
+                            );
+                            expect_narrow_acc()?;
+                            FmaFullMaxState::Narrow
+                        }
+                        FmaFullMaxState::LowerBound => unreachable!(),
+                    };
+                }
+
+                *acc = acc_after;
+            }
+        }
+
+        // Check that the input meets its goals of subnormal count and acc preservation
+        prop_assert_eq!(actual_subnormals, num_subnormals);
+        let first_multipliers: [Option<f32>; ILP] =
+            std::array::from_fn(|idx| target.get(idx).copied());
+        for ((acc_idx, final_acc), first_multiplier) in
+            accs.into_iter().enumerate().zip(first_multipliers)
+        {
+            if !first_multiplier
+                .unwrap_or(f32::MIN_POSITIVE / 2.0)
+                .is_subnormal()
+            {
+                prop_assert!(
+                        acc_range.contains(&final_acc),
+                        "{}* Final accumulator value {final_acc} escaped narrow range [0.5; 2] by more than tolerance {NARROW_ACC_TOLERANCE}",
+                        error_context(target.len().div_ceil(ILP), acc_idx)
+                    );
+            }
+        }
+        Ok(())
+    }
+    //
+    proptest! {
+        #[test]
+        fn generate_inputs_ilp1(
+            (mut target, num_subnormals) in target_and_num_subnormals(1)
+        ) {
+            test_generate_inputs::<1>(&mut target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_inputs_ilp2(
+            (mut target, num_subnormals) in target_and_num_subnormals(2)
+        ) {
+            test_generate_inputs::<2>(&mut target, num_subnormals)?;
+        }
+
+        #[test]
+        fn generate_inputs_ilp3(
+            (mut target, num_subnormals) in target_and_num_subnormals(3)
+        ) {
+            test_generate_inputs::<3>(&mut target, num_subnormals)?;
+        }
+    }
 
     // Test the `Operation` implementation
     common::test_pairwise_operation!(FmaFullMax, NeedsNarrowAcc::FirstNormal, 2);

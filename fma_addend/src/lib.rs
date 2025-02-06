@@ -593,7 +593,7 @@ mod tests {
         }
 
         #[test]
-        fn generate_add_inputs_ilp3(
+        fn generate_inputs_ilp3(
             (mut target, num_subnormals) in target_and_num_subnormals(3),
             multiplier in multiplier()
         ) {
