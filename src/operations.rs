@@ -62,11 +62,13 @@ macro_rules! for_each_ilp {
     } ) => {
         for_each_ilp!(
             // Currently known CPU microarchitectures have at most 32 CPU
-            // registers, so there is no point in instantiating ILP >32.
+            // registers, and we always need to keep at least one register aside
+            // to avoid spill in the presence of pessimize optimization
+            // barriers, so there is no point in instantiating ILP >=32.
             inputs::benchmark_memory $args with {
                 common_config: $common_config,
                 selected_ilp: $selected_ilp,
-                instantiated_ilps: [1, 2, 4, 8, 16, 32],
+                instantiated_ilps: [1, 2, 4, 8, 16],
             }
         );
     };
@@ -230,7 +232,7 @@ fn make_inputregs_group<'criterion>(
 #[inline(never)] // Faster build + easier profiling
 fn benchmark_operation<T: FloatLike, Op: Operation>(type_config: &mut TypeConfiguration<T>) {
     // For each supported degree of instruction-level parallelism...
-    for ilp in (0..=MIN_FLOAT_REGISTERS.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
+    for ilp in (0..MIN_FLOAT_REGISTERS.ilog2()).map(|ilp_pow2| 2usize.pow(ilp_pow2)) {
         // Name this (type, benchmark, ilp) triplet
         let ilp_name = if ilp == 1 {
             "chained".to_string()
@@ -290,7 +292,9 @@ where
     } else {
         Op::AUX_REGISTERS_MEMOP
     };
-    if ilp + non_accumulator_registers > MIN_FLOAT_REGISTERS {
+    // -1 because optimization barriers always use at least one extra register
+    let available_registers = MIN_FLOAT_REGISTERS - 1;
+    if ilp + non_accumulator_registers > available_registers {
         return false;
     }
 
@@ -300,7 +304,7 @@ where
     if cfg!(feature = "more_ilp_configurations") {
         true
     } else {
-        let max_ilp_memop = MIN_FLOAT_REGISTERS - Op::AUX_REGISTERS_MEMOP;
+        let max_ilp_memop = available_registers - Op::AUX_REGISTERS_MEMOP;
         // Round to lower power of two since we only benchmark at powers of two
         let optimal_ilp_memop = 1 << max_ilp_memop.ilog2();
         ilp == 1 || ilp == optimal_ilp_memop || ilp == optimal_ilp_memop / 2
