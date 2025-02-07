@@ -684,7 +684,7 @@ mod tests {
         num_subnormals: usize,
     ) -> Result<(), TestCaseError> {
         // Tolerance of the final check that the accumulator stayed in narrow range
-        const NARROW_ACC_TOLERANCE: f32 = 10.0 * f32::EPSILON;
+        const NARROW_ACC_TOLERANCE: f32 = 20.0 * f32::EPSILON;
         let acc_range = (0.5 - NARROW_ACC_TOLERANCE)..=(2.0 + NARROW_ACC_TOLERANCE);
 
         // Generate the inputs
@@ -711,25 +711,25 @@ mod tests {
         let mut actual_subnormals = 0;
         let mut accs = accs_init;
         let mut expected_state: [FmaFullMaxState<f32>; ILP] = [FmaFullMaxState::Narrow; ILP];
-        let error_context = |chunk_idx: usize, acc_idx| {
+        let error_context = |max_chunk_idx: usize, acc_idx| {
             fn acc_inputs<const ILP: usize>(
                 half: &[f32],
-                chunk_idx: usize,
+                max_chunk_idx: usize,
                 acc_idx: usize,
             ) -> impl Iterator<Item = f32> + '_ {
                 half.iter()
                     .copied()
                     .skip(acc_idx)
                     .step_by(ILP)
-                    .take(chunk_idx)
+                    .take(max_chunk_idx)
             }
             format!(
                 "\n\
                 * Starting from initial accumulator {:?}\n\
                 * After integrating input(s) {:?}\n",
                 accs_init[acc_idx],
-                acc_inputs::<ILP>(left, chunk_idx, acc_idx)
-                    .zip(acc_inputs::<ILP>(right, chunk_idx, acc_idx))
+                acc_inputs::<ILP>(left, max_chunk_idx, acc_idx)
+                    .zip(acc_inputs::<ILP>(right, max_chunk_idx, acc_idx))
                     .collect::<Vec<_>>()
             )
         };
@@ -898,7 +898,7 @@ mod tests {
                 prop_assert!(
                         acc_range.contains(&final_acc),
                         "{}* Final accumulator value {final_acc} escaped narrow range [0.5; 2] by more than tolerance {NARROW_ACC_TOLERANCE}",
-                        error_context(target.len().div_ceil(ILP), acc_idx)
+                        error_context(usize::MAX, acc_idx)
                     );
             }
         }

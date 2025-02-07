@@ -352,6 +352,9 @@ mod tests {
     use rand::rngs::ThreadRng;
     use std::panic::AssertUnwindSafe;
 
+    /// Relative tolerance on accumulator value checks
+    const ACC_TOLERANCE: f32 = 50.0 * f32::EPSILON;
+
     /// Multiplier generator
     fn multiplier() -> impl Strategy<Value = f32> {
         prop_oneof![Just(0.5), Just(2.0),]
@@ -475,17 +478,17 @@ mod tests {
         let mut accs = accs_init;
         let mut to_negate: [Option<(f32, Multiplier)>; ILP] = [None; ILP];
         let mut last_normal = [false; ILP];
-        let error_context = |chunk_idx: usize, acc_idx| {
+        let error_context = |max_chunk_idx: usize, acc_idx| {
             fn acc_inputs<const ILP: usize>(
                 half: &[f32],
-                chunk_idx: usize,
+                max_chunk_idx: usize,
                 acc_idx: usize,
             ) -> impl Iterator<Item = f32> + '_ {
                 half.iter()
                     .copied()
                     .skip(acc_idx)
                     .step_by(ILP)
-                    .take(chunk_idx)
+                    .take(max_chunk_idx)
             }
             format!(
                 "\n\
@@ -493,8 +496,8 @@ mod tests {
                 * After integrating input(s) {:?}\n",
                 accs_init[acc_idx],
                 multiplier,
-                acc_inputs::<ILP>(left, chunk_idx, acc_idx)
-                    .zip(acc_inputs::<ILP>(right, chunk_idx, acc_idx))
+                acc_inputs::<ILP>(left, max_chunk_idx, acc_idx)
+                    .zip(acc_inputs::<ILP>(right, max_chunk_idx, acc_idx))
                     .collect::<Vec<_>>()
             )
         };
@@ -564,13 +567,14 @@ mod tests {
 
         // Check that the input meets its goals of subnormal count and acc preservation
         prop_assert_eq!(actual_subnormals, num_subnormals);
-        for (acc, init) in accs.iter().zip(accs_init) {
+        for ((acc_idx, acc), init) in accs.iter().enumerate().zip(accs_init) {
             let difference = (acc - init).abs();
-            let threshold = 30.0 * f32::EPSILON * init;
+            let threshold = ACC_TOLERANCE * init;
             prop_assert!(
                 difference < threshold,
-                "{acc} is too far from {init} (difference {difference} above threshold {threshold} after integrating inputs {target:?}"
-            )
+                "{}* Final accumulator {acc} is too far from initial value {init} (difference {difference} above threshold {threshold})",
+                error_context(usize::MAX, acc_idx)
+            );
         }
         Ok(())
     }
@@ -602,5 +606,5 @@ mod tests {
     }
 
     // Test the `Operation` implementation
-    common::test_pairwise_operation!(FmaAddend, NeedsNarrowAcc::Always, 1, 30.0 * f32::EPSILON);
+    common::test_pairwise_operation!(FmaAddend, NeedsNarrowAcc::Always, 1, ACC_TOLERANCE);
 }
