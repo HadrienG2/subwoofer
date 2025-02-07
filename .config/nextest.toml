@@ -1,0 +1,6 @@
+[profile.default]
+failure-output = "immediate-final"
+
+[profile.night]
+slow-timeout = { period = "900s" }
+fail-fast = false
