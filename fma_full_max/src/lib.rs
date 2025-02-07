@@ -100,7 +100,7 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaFullMaxRun<Storage, 
         let lower_bound = lower_bound::<Storage::Element>();
         operations::integrate_pairs(
             &mut self.accumulators,
-            operations::hide_accumulators::<_, ILP, false>,
+            operations::hide_accumulators::<_, ILP, true>,
             &self.inputs,
             move |acc, [elem1, elem2]| {
                 // The input data stream is generated using a rather elaborate

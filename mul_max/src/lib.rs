@@ -91,7 +91,7 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for MulMaxRun<Storage, ILP>
         // its knowledge that inputs are reused here
         operations::integrate::<_, _, ILP, false>(
             &mut self.accumulators,
-            operations::hide_accumulators::<_, ILP, false>,
+            operations::hide_accumulators::<_, ILP, true>,
             &mut self.inputs,
             integrate,
         );

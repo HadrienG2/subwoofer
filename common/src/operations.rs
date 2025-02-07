@@ -351,12 +351,21 @@ pub fn hide_accumulators<T: FloatLike, const ILP: usize, const MINIMAL: bool>(
         return;
     };
 
-    // Otherwise apply pessimize::hide() to a set of accumulators which is large
-    // enough that there aren't enough remaining non-hidden accumulators left
-    // for the compiler to perform reasonable autovectorization.
-    let max_elided_barriers = if MINIMAL { min_vector_ilp.get() - 1 } else { 0 };
-    let min_hidden_accs = ILP.saturating_sub(max_elided_barriers);
-    for acc in accumulators.iter_mut().take(min_hidden_accs) {
+    // In non-MINIMAL mode, just hide all the accumulators
+    if !MINIMAL {
+        return accumulators.hide_inplace();
+    }
+
+    // In MINIMAL mode, try to be more clever by only hiding a subset of the
+    // accumulators, chosen such that there are not enough non-hidden
+    // accumulators to fill up a SIMD vector.
+    //
+    // This means that if it wants to autovectorize, the compiler must use
+    // masking. This is sometimes enough to make autovectorization unfavorable
+    // in the eyes of the compiler's cost model. If you still get
+    // autovectorization, use non-MINIMAL mode instead.
+    let max_elided_barriers = min_vector_ilp.get() - 1;
+    for acc in accumulators.iter_mut().skip(max_elided_barriers) {
         let old_acc = *acc;
         let new_acc = pessimize::hide::<T>(old_acc);
         *acc = new_acc;

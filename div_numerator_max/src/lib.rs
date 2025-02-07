@@ -93,7 +93,7 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for DivNumeratorMaxRun<Stor
         // its knowledge that inputs are being reused here
         operations::integrate::<_, _, ILP, false>(
             &mut self.accumulators,
-            operations::hide_accumulators::<_, ILP, false>,
+            operations::hide_accumulators::<_, ILP, true>,
             &mut self.inputs,
             integrate,
         );

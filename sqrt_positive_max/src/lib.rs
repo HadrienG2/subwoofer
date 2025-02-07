@@ -91,14 +91,14 @@ impl<I: Inputs, const ILP: usize> BenchmarkRun for SqrtPositiveMaxRun<I, ILP> {
 
     #[inline]
     fn integrate_inputs(&mut self) {
-        let hide_accumulators = operations::hide_accumulators::<_, ILP, false>;
+        let hide_accumulators = operations::hide_accumulators::<_, ILP, true>;
         let iter = |acc: I::Element, elem: I::Element| {
             // MAX is unaffected by the order of magnitude of inputs, and SQRT
             // transforms any normal number into another normal number without
             // any possibility of overflow or underflow, so this benchmark
             // behaves homogeneously no matter what the order of magnitude of
             // its normal inputs is.
-            acc.fast_max(operations::hide_single_accumulator(elem.sqrt()))
+            operations::hide_single_accumulator(elem.sqrt()).fast_max(acc)
         };
         match I::KIND {
             InputKind::ReusedRegisters { .. } => {

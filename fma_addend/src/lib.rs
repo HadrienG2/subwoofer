@@ -123,7 +123,7 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for FmaAddendRun<Storage, I
         let inv_multiplier = self.inv_multiplier;
         operations::integrate_pairs(
             &mut self.accumulators,
-            operations::hide_accumulators::<_, ILP, true>,
+            operations::hide_accumulators::<_, ILP, false>,
             &self.inputs,
             move |acc, [elem1, elem2]| {
                 // - By flipping between a multiplier and its inverse, we ensure
