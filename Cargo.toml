@@ -34,7 +34,11 @@ version = "1.0.0"
 [workspace.dependencies]
 common = { path = "./common" }
 criterion = { version = "0.5", default-features = false }
+itertools = "0.14"
+num-traits = "0.2"
 pessimize = { version = "2.0", features = ["nightly"] }
+proptest = { version = "1.6", default-features = false, features = ["handle-panics", "std"] }
+proptest-derive = "0.5"
 rand = "0.8.5"
 target-features = "0.1"
 hwlocality = "1.0.0-alpha"
@@ -59,6 +63,16 @@ opt-level = 2
 [profile.release]
 # May slightly improve build and runtime perf
 panic = "abort"
+
+# Scale to more PROPTEST_CASES at the expense of slightly slower test builds
+[profile.test]
+opt-level = 1
+#
+[profile.test.package.proptest]
+opt-level = 3
+#
+[profile.test.package.rand_chacha]
+opt-level = 3
 
 # ...and everything below this point is about the "subwoofer" root crate
 
@@ -99,7 +113,7 @@ check = [
     "bench_add",                 # ADD is assumed to be the same as SUB
     "bench_max",                 # MAX is assumed to be same as MIN
     "bench_mul_max",             # Includes subnormal MUL -> subnormal MAX
-    "bench_sqrt_positive_max",   # Includes subnormal SQRT -> maybe-subnormal MAX
+    "bench_sqrt_positive_max",   # Includes subnormal SQRT -> normal MAX
     "bench_div_numerator_max",   # Includes DIV with subnormal numerator -> subnormal MAX
     "bench_div_denominator_min", # Includes DIV with subnormal denominator -> infinite MIN
     "bench_fma_full_max",        # Includes subnormal FMA -> subnormal MAX
@@ -137,7 +151,7 @@ bench_all = [
     "bench_add",                 # ADD with x%subnormal input, normal result, assumed to behave just like SUB
     "bench_max",                 # MAX with x%subnormal input, normal result, assumed to behave just like MIN
     "bench_mul_max",             # MUL with x%subnormal input & result -> x%subnormal MAX
-    "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> x²%subnormal MAX
+    "bench_sqrt_positive_max",   # SQRT with x%subnormal input, x²%subnormal result -> normal MAX
     "bench_div_numerator_max",   # DIV with x%subnormal numerator, normal denominator -> x%subnormal MAX
     "bench_div_denominator_min", # DIV with x%subnormal denominator, normal numerator -> x%infinite MIN
     "bench_fma_addend",          # FMA with x%subnormal addend, normal multiplier & result

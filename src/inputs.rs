@@ -120,7 +120,7 @@ pub fn run_benchmark<B: Benchmark>(
             // - Inputs are randomly reordered from one batch to another, which
             //   will avoid input order-related hardware bias if criterion runs
             //   enough batches (as it does in its default configuration).
-            let mut run = benchmark.start_run(rng);
+            let mut run = benchmark.start_run(rng, false);
 
             // Timed region, this is the danger zone where inlining and compiler
             // optimizations must be reviewed very carefully.

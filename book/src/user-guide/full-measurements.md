@@ -96,9 +96,9 @@ default, as we aim for a default configuration that Just Works.
 
 Once you've found the level of ILP that leads to peak throughput for each
 benchmark, you can speed up benchmark execution by only enabling this ILP
-configuration along with the `chained` latency-bound configuration. Here is an
-example of applying such an ILP configuration filter when benchmarking SQRT
-performance on an AMD Zen 2 CPU:
+configuration along with the maximally latency-bound `chained` configuration.
+Here is an example of applying such an ILP configuration filter when
+benchmarking SQRT performance on an AMD Zen 2 CPU:
 
 ```bash
 cargo bench --features=measure -- '(max/ilp08|sqrt_positive_max/ilp04)|chained'

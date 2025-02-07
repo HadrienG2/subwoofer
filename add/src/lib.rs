@@ -1,6 +1,6 @@
 use common::{
     arch::HAS_MEMORY_OPERANDS,
-    inputs::{self, Inputs, InputsMut},
+    inputs::{generators::add::generate_add_inputs, Inputs, InputsMut},
     operations::{self, Benchmark, BenchmarkRun, Operation},
 };
 use rand::Rng;
@@ -19,7 +19,9 @@ impl Operation for Add {
     // Inputs are directly reduced into the accumulator, can use memory operands
     const AUX_REGISTERS_MEMOP: usize = (!HAS_MEMORY_OPERANDS) as usize;
 
-    fn make_benchmark<const ILP: usize>(input_storage: impl InputsMut) -> impl Benchmark {
+    fn make_benchmark<Storage: InputsMut, const ILP: usize>(
+        input_storage: Storage,
+    ) -> impl Benchmark<Float = Storage::Element> {
         AddBenchmark::<_, ILP> {
             input_storage,
             num_subnormals: None,
@@ -34,25 +36,29 @@ struct AddBenchmark<Storage: InputsMut, const ILP: usize> {
 }
 //
 impl<Storage: InputsMut, const ILP: usize> Benchmark for AddBenchmark<Storage, ILP> {
+    type Float = Storage::Element;
+
     fn num_operations(&self) -> usize {
         operations::accumulated_len(&self.input_storage, ILP)
     }
 
     fn setup_inputs(&mut self, num_subnormals: usize) {
+        assert!(num_subnormals <= self.input_storage.as_ref().len());
         self.num_subnormals = Some(num_subnormals);
     }
 
     #[inline]
-    fn start_run(&mut self, rng: &mut impl Rng) -> Self::Run<'_> {
-        inputs::generate_add_inputs::<_, ILP>(
-            &mut self.input_storage,
-            rng,
+    fn start_run(&mut self, rng: &mut impl Rng, inside_test: bool) -> Self::Run<'_> {
+        generate_add_inputs::<_, ILP>(
             self.num_subnormals
                 .expect("Should have called setup_inputs first"),
+            &mut self.input_storage,
+            rng,
+            inside_test,
         );
         AddRun {
             inputs: self.input_storage.freeze(),
-            accumulators: operations::narrow_accumulators(rng),
+            accumulators: operations::narrow_accumulators(rng, inside_test),
         }
     }
 
@@ -70,6 +76,10 @@ struct AddRun<Storage: Inputs, const ILP: usize> {
 //
 impl<Storage: Inputs, const ILP: usize> BenchmarkRun for AddRun<Storage, ILP> {
     type Float = Storage::Element;
+
+    fn inputs(&self) -> &[Self::Float] {
+        self.inputs.as_ref()
+    }
 
     #[inline]
     fn integrate_inputs(&mut self) {
@@ -91,4 +101,11 @@ impl<Storage: Inputs, const ILP: usize> BenchmarkRun for AddRun<Storage, ILP> {
     fn accumulators(&self) -> &[Storage::Element] {
         &self.accumulators
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::operations::test_utils::NeedsNarrowAcc;
+    common::test_scalar_operation!(Add, NeedsNarrowAcc::Always, 20.0 * f32::EPSILON);
 }

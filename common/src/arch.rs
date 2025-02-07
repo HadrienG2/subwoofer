@@ -14,7 +14,7 @@ pub const ALLOWS_DIV_OUTPUT_DENOMINATOR: bool = const {
 };
 
 /// Truth that the current CPU ISA allows using a memory operand for the
-/// numerator of a division. Implies HAS_MEMORY_OPERANDS.
+/// numerator of a division. Implies [`HAS_MEMORY_OPERANDS`].
 pub const ALLOWS_DIV_MEMORY_NUMERATOR: bool = const {
     let target = target_features::CURRENT_TARGET;
     match target.architecture() {
@@ -35,7 +35,8 @@ pub const HAS_HARDWARE_FMA: bool = const {
     }
 };
 
-/// Truth that the current CPU ISA has an FNMA instruction
+/// Truth that the current CPU ISA has an FNMA instruction. Implies
+/// [`HAS_HARDWARE_FMA`].
 ///
 /// FNMA is to FMA what `-a * b + c` is to `a * b + c`.
 pub const HAS_HARDWARE_NEGATED_FMA: bool = const {
@@ -81,6 +82,7 @@ pub const MIN_FLOAT_REGISTERS: usize = const {
             if target.supports_feature_str("sve") {
                 32
             } else {
+                // Glossing over the VFP mess here, since this is a lower bound
                 16
             }
         }
@@ -100,3 +102,16 @@ pub const MIN_FLOAT_REGISTERS: usize = const {
         _ => 16,
     }
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// When a property should imply another, make sure this is actually true
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn implications() {
+        assert!(!ALLOWS_DIV_MEMORY_NUMERATOR || HAS_MEMORY_OPERANDS);
+        assert!(!HAS_HARDWARE_NEGATED_FMA || HAS_HARDWARE_FMA);
+    }
+}

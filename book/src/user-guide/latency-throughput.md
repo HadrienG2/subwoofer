@@ -40,9 +40,9 @@ number of identical instruction streams where the output of each operation is
 the input of the next one.
 
 - In the `chained` configurations, there is only one instruction stream, so we
-  expect latency-bound performance. The execution time for a chain of N
-  operations should therefore be N times the execution latency of an individual
-  operation.
+  expect maximally latency-bound performance. The execution time for a chain of
+  N operations should therefore be N times the execution latency of an
+  individual operation.
 - In one of the configurations of higher Instruction-Level Parallelism (ILP),
   which is normally close to the maximum ILP that is allowed by the CPU ISA,
   maximal performance will be observed. At this throughput-bound limit,
@@ -59,5 +59,6 @@ There is unfortunately one exception to the "`chained` is latency-bound" general
 rule, which is the `sqrt_positive_max` benchmark. This benchmark does not
 feature an SQRT → SQRT → SQRT... dependency chain, because performing such a
 sequence of operations while guaranteeing continued subnormal input is
-difficult. Therefore, this benchmark cannot currently be used to measure SQRT
-latency, and its output in `chained` mode should be ignored for now.
+impossible as the square root of a subnormal number is a normal number.
+Therefore, this benchmark cannot currently be used to measure SQRT latency, and
+its output in `chained` mode should be ignored for now.
