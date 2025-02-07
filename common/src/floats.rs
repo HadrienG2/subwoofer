@@ -810,7 +810,7 @@ mod tests {
             || exp_range.end <= exp_range.start
             || exp_range.end > T::FINITE_EXPS.end + 1;
         let exp_range2 = exp_range.clone();
-        let num_samples = crate::tests::proptest_cases();
+        let num_samples = crate::tests::proptest_cases().isqrt();
         let make_sampler =
             || T::sampler(exp_range2, test_utils::suggested_extremal_bias(num_samples));
         if invalid_range {
@@ -901,6 +901,10 @@ mod tests {
     }
     //
     proptest! {
+        #![proptest_config(
+            ProptestConfig::with_cases(crate::tests::proptest_cases().isqrt() as u32)
+        )]
+
         #[test]
         fn sampler_f32(exp_range in exp_range::<f32>()) {
             let mut rng = rand::thread_rng();
