@@ -19,6 +19,7 @@ members = [
     "fma_multiplier",
     "max",
     "mul_max",
+    "plot",
     "sqrt_positive_max"
 ]
 
@@ -32,11 +33,17 @@ repository = "https://github.com/HadrienG2/subwoofer.git"
 version = "1.0.0"
 
 [workspace.dependencies]
+anyhow = "1.0"
 common = { path = "./common" }
 criterion = { version = "0.5", default-features = false }
+criterion-cbor = { git = "https://github.com/HadrienG2/criterion_cbor.git", branch = "main" }
+env_logger = "0.11"
 itertools = "0.14"
+log = "0.4"
 num-traits = "0.2"
+ordered-float = "4.6"
 pessimize = { version = "2.0", features = ["nightly"] }
+plotters = { version = "0.3", default-features = false, features = ["bitmap_encoder", "ttf"] }
 proptest = { version = "1.6", default-features = false, features = ["handle-panics", "std"] }
 proptest-derive = "0.5"
 rand = "0.8.5"
