@@ -177,7 +177,7 @@ where
             MulDivState::Unconstrained => {}
             MulDivState::InvertNormal(_) => {
                 let last = stream
-                    .last()
+                    .next_back()
                     .expect("InvertNormal is only reachable after >= 1 normal inputs");
                 assert!(last.is_normal());
                 *last = T::splat(1.0);
@@ -474,7 +474,7 @@ mod tests {
             prop_assert_eq!(&stream.state, &MulDivState::Unconstrained);
 
             // Simulate the generation of dataset, checking stream behavior
-            let stream_indices = (0..target.len()).skip(stream_idx).step_by(num_streams);
+            let mut stream_indices = (0..target.len()).skip(stream_idx).step_by(num_streams);
             for (elem_idx, is_subnormal) in stream_indices.clone().zip(subnormals) {
                 let new_value = if is_subnormal {
                     <MulDivStream<_, _, _> as GeneratorStream<ThreadRng>>::record_subnormal(&mut stream);
@@ -564,7 +564,7 @@ mod tests {
                 prop_assert_eq!(cancel_subnormal_invocations.len(), 1);
                 prop_assert!(cancel_subnormal_invocations[0].argument >= 0.5);
                 prop_assert!(cancel_subnormal_invocations[0].argument < 2.0);
-                let last_idx = stream_indices.last().unwrap();
+                let last_idx = stream_indices.next_back().unwrap();
                 expected[last_idx] = cancel_subnormal_invocations[0].result;
             } else {
                 prop_assert!(cancel_subnormal_invocations.is_empty());
