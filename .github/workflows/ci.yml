@@ -99,11 +99,11 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
-      - name: Set up hwloc
+      - name: Set up hwloc & fontconfig
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
           version: 1.0
-          packages: libhwloc-dev libudev-dev
+          packages: pkg-config libfreetype6-dev libfontconfig1-dev libhwloc-dev libudev-dev
 
       - name: Set up Rust caching
         uses: Swatinem/rust-cache@v2
@@ -187,11 +187,11 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
-      - name: Set up hwloc
+      - name: Set up hwloc & fontconfig
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
           version: 1.0
-          packages: libhwloc-dev libudev-dev
+          packages: pkg-config libfreetype6-dev libfontconfig1-dev libhwloc-dev libudev-dev
 
       # No caching here because the job does not run often enough
 
