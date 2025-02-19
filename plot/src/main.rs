@@ -6,6 +6,7 @@ use criterion_cbor::{DataDirectory, Search};
 use kernel_density_estimator::KernelDensityEstimator;
 use log::{debug, info};
 use ordered_float::NotNan;
+use plotters::{prelude::*, style::RelativeSize};
 use std::path::Path;
 
 fn main() -> Result<()> {
@@ -114,16 +115,60 @@ fn main() -> Result<()> {
             .collect::<Result<Box<[_]>>>()?;
 
         // Compute a kernel density estimate
-        let kde = KernelDensityEstimator::new(time_per_elem);
-        let kde_samples = kde.sample(
-            kde.suggested_range(),
-            /* TODO: Make tunable, will ultimately be imposed by plot resolution */ 1080,
-        );
-        dbg!(kde_samples);
-        // TODO: Add logging to check logical correctness, then do a plot that shows the samples and KDE
+        let plot_width = 640;
+        let kde = KernelDensityEstimator::new(time_per_elem.clone());
+        let kde_range = 17.75..=17.85/*kde.suggested_range()*/;
+        let kde_samples = kde.sample(kde_range.clone(), plot_width);
+        dbg!(&kde_samples);
+
+        // TODO: Do a plot that shows the samples and KDE
+        let root = BitMapBackend::new("test.png", (plot_width as u32, 480)).into_drawing_area();
+        root.fill(&WHITE)?;
+        let root = root.margin(10, 10, 10, 10);
+        // After this point, we should be able to construct a chart context
+        let max_y = kde_samples
+            .iter()
+            .max_by(|x, y| x.total_cmp(y))
+            .copied()
+            .unwrap();
+        let mut chart = ChartBuilder::on(&root)
+            // Set the caption of the chart
+            .caption("This is our first plot", ("sans-serif", 40).into_font())
+            // Set the size of the label region
+            .x_label_area_size(20)
+            .y_label_area_size(40)
+            // Finally attach a coordinate on the drawing area and make a chart context
+            .build_cartesian_2d(*kde_range.start()..*kde_range.end(), 0f64..max_y)?;
+
+        // Then we can draw a mesh
+        chart.configure_mesh().draw()?;
+
+        // And we can draw something in the drawing area
+        chart.draw_series(LineSeries::new(
+            kde_samples.iter().enumerate().map(|(idx, y)| {
+                let x = kde_range.start()
+                    + (kde_range.end() - kde_range.start()) * idx as f64
+                        / (kde_samples.len() - 1) as f64;
+                (x, *y)
+            }),
+            &RED,
+        ))?;
+        let mut point_color = RGBAColor::from(BLUE);
+        point_color.3 = 0.15;
+        chart.draw_series(PointSeries::of_element(
+            time_per_elem.iter().map(|x| (x.into_inner(), 0.0)),
+            2.0,
+            ShapeStyle {
+                color: point_color,
+                filled: true,
+                stroke_width: 1,
+            },
+            &|coord, size, style| EmptyElement::at(coord) + Circle::new((0, 5), size, style),
+        ))?;
+        root.present()?;
         // TODO: Finally, do final 2D plot that aggregates multiple subnormal
         //       proportions, by removing proportion filter above + detecting
-        //       benchmark change to decide when the 2D plot changes.
+        //       benchmark change to decide when the 2D plot is drawn.
 
         todo!()
     }

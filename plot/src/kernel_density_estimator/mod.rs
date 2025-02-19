@@ -13,10 +13,10 @@ use std::{
 /// Relative length of the sliding window used to determine the kernel
 /// bandwidths from inter-sample distances via median filtering
 ///
-/// This is a fraction of the total dataset width, so a higher value means a
-/// smaller window that spans less points, leading to a kernel density estimator
-/// that looks less smooth but is more likely to handle narrow peaks in the
-/// true probability density function.
+/// This is a fraction of the total number of points in the dataset, so a higher
+/// value means a smaller window that spans less points, leading to a kernel
+/// density estimator that looks less smooth but is more likely to handle narrow
+/// peaks in the true probability density function.
 ///
 /// This should be set according to the smallest expected width of peaks in the
 /// probability density law. When in doubt, start with high values during data
@@ -24,15 +24,16 @@ use std::{
 /// data, at the expense of more false positive peaks in the probability law)
 /// then shrink until you get the smoothest plot that faithfully represents the
 /// data (no fake peak that doesn't seem to exist in the real timing law).
-const REL_HALF_SMOOTHING_LEN: usize = 30;
+const REL_HALF_SMOOTHING_LEN: usize = 10;
 
 /// Kernel function bandwidth as a function of the median inter-sample spacing
+/// in the region where this sample is located
 ///
 /// Higher means smoother, less spiky output with less fake modes, at the
 /// expense of broadening the density estimate with respect to the actual
 /// probability density distribution, to the point of hiding some of the
 /// probability distribution modes in extreme cases.
-const REL_KERNEL_BANDWIDTH: f64 = 2.0;
+const REL_KERNEL_BANDWIDTH: f64 = 15.0;
 
 /// Kernel density estimator for timing samples
 ///
@@ -82,14 +83,15 @@ impl KernelDensityEstimator {
     /// which the kernel function will do nothing but slowly decay below a
     /// negligible fraction of its maximum value (probably 1%?).
     pub fn suggested_range(&self) -> RangeInclusive<f64> {
-        let end = self
+        let (start, end) = self
             .sorted_samples
             .iter()
             .zip(&self.kernel_bandwidths)
-            .map(|(pos, width)| pos + width)
-            .max()
-            .expect("Should process at least one data point");
-        0.0..=end.into_inner()
+            .map(|(pos, width)| (pos - width, pos + width))
+            .fold((f64::MAX, f64::MIN), |(min, max), (start, end)| {
+                (min.min(start.into_inner()), max.max(end.into_inner()))
+            });
+        start..=end
     }
 
     /// Produce `num_points` regularly spaced samples of the kernel density
@@ -203,11 +205,11 @@ impl KernelDensitySampler {
 
         // Shorthands for manipulating horizontal range edges and transforming
         // horizontal coordinates into output data indices.
-        debug!("Asked to sample a kernel density estimator over {num_points} points in range {horizontal_range:?}");
         let x_start = horizontal_range.start();
         let x_end = horizontal_range.end();
         let last_idx = num_points - 1;
         let rel_x_to_idx = last_idx as f64 / (x_end - x_start);
+        debug!("Asked to sample a kernel density estimator over {num_points} points in range {horizontal_range:?} (horizontal step {})", 1.0 / rel_x_to_idx);
 
         // Determine which output data points are covered by the kernel
         // associated with each sample, and deduce at which output index we need
@@ -264,10 +266,11 @@ impl KernelDensitySampler {
             }
 
             // Prepare kernel function for this sample
+            let inv_bandwidth_as_idx = 1.0 / bandwidth_as_idx.into_inner();
             let kernel = KernelFunction {
                 sample_idx: sample_idx.into_inner(),
-                bandwidth_as_idx_times_3_over_4: 0.75 * bandwidth_as_idx.into_inner(),
-                inv_bandwidth_as_idx: 1.0 / bandwidth_as_idx.into_inner(),
+                inv_bandwidth_as_idx,
+                inv_bandwidth_as_idx_times_3_over_4: 0.75 * inv_bandwidth_as_idx,
             };
 
             // Record at which output index the kernel function associated with
@@ -484,12 +487,12 @@ struct KernelFunction {
     /// Position of the timing sample in the space of output indices
     sample_idx: f64,
 
-    /// 3/4 prefactor of the Epanechnikov kernel function, multiplied by the
-    /// kernel bandwidth in the space of output indices
-    bandwidth_as_idx_times_3_over_4: f64,
-
     /// Inverse of the kernel bandwidth in the space of output indices
     inv_bandwidth_as_idx: f64,
+
+    /// `inv_bandwidth_as_idx` multiplied by the 3/4 prefactor of the
+    /// Epanechnikov kernel function
+    inv_bandwidth_as_idx_times_3_over_4: f64,
 }
 //
 impl KernelFunction {
@@ -500,7 +503,7 @@ impl KernelFunction {
         if cfg!(debug_assertions) && (u.abs() - 1.0 > 0.0) {
             warn!("Useless kernel function computation with out-of-range coordinate {u}");
         }
-        let result = self.bandwidth_as_idx_times_3_over_4 * (1.0 + u) * (1.0 - u);
+        let result = self.inv_bandwidth_as_idx_times_3_over_4 * (1.0 + u) * (1.0 - u);
         result.max(0.0)
     }
 }
