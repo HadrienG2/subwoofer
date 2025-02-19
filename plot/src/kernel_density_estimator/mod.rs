@@ -24,7 +24,7 @@ use std::{
 /// data, at the expense of more false positive peaks in the probability law)
 /// then shrink until you get the smoothest plot that faithfully represents the
 /// data (no fake peak that doesn't seem to exist in the real timing law).
-const REL_HALF_SMOOTHING_LEN: usize = 10;
+const REL_HALF_SMOOTHING_LEN: usize = 50;
 
 /// Kernel function bandwidth as a function of the median inter-sample spacing
 /// in the region where this sample is located
@@ -33,7 +33,7 @@ const REL_HALF_SMOOTHING_LEN: usize = 10;
 /// expense of broadening the density estimate with respect to the actual
 /// probability density distribution, to the point of hiding some of the
 /// probability distribution modes in extreme cases.
-const REL_KERNEL_BANDWIDTH: f64 = 15.0;
+const REL_KERNEL_BANDWIDTH: f64 = 20.0;
 
 /// Kernel density estimator for timing samples
 ///
