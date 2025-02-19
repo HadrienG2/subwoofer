@@ -6,7 +6,7 @@ use criterion_cbor::{DataDirectory, Search};
 use kernel_density_estimator::KernelDensityEstimator;
 use log::{debug, info};
 use ordered_float::NotNan;
-use plotters::{prelude::*, style::RelativeSize};
+use plotters::prelude::*;
 use std::path::Path;
 
 fn main() -> Result<()> {
