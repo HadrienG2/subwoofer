@@ -497,6 +497,7 @@ impl KernelDensitySampler {
                     }
                     break 'generate_output;
                 }
+                (None, None) => break 'generate_output,
                 _ => unreachable!(),
             }
         }
