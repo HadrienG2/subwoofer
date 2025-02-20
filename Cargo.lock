@@ -243,6 +243,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
+name = "colorous"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b86f9fcf921b9f3be5b805d55ebe0184b24144bf8dbe2110c7920006836cf90"
+
+[[package]]
 name = "common"
 version = "1.0.0"
 dependencies = [
@@ -979,6 +985,7 @@ name = "plot"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "colorous",
  "criterion",
  "criterion-cbor",
  "env_logger",

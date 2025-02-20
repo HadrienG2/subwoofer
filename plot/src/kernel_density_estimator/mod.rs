@@ -24,7 +24,7 @@ use std::{
 /// data, at the expense of more false positive peaks in the probability law)
 /// then shrink until you get the smoothest plot that faithfully represents the
 /// data (no fake peak that doesn't seem to exist in the real timing law).
-const REL_HALF_SMOOTHING_LEN: usize = 50;
+const REL_HALF_SMOOTHING_LEN: usize = 20;
 
 /// Kernel function bandwidth as a function of the median inter-sample spacing
 /// in the region where this sample is located
@@ -33,7 +33,28 @@ const REL_HALF_SMOOTHING_LEN: usize = 50;
 /// expense of broadening the density estimate with respect to the actual
 /// probability density distribution, to the point of hiding some of the
 /// probability distribution modes in extreme cases.
-const REL_KERNEL_BANDWIDTH: f64 = 20.0;
+const REL_KERNEL_BANDWIDTH: f64 = 15.0;
+
+/// Upper bound on the fraction of low outliers that take an unusually short
+/// amount of time to run
+const LOW_OUTLIER_FRACTION: f64 = 0.01;
+
+/// Relative margin before the first non-outlier point
+///
+/// The plot's horizontal scale will be grown by up to this factor in an attempt
+/// to include some of the low outliers into the plot and also add some visual
+/// space before the first peak.
+const LOW_MARGIN: f64 = 0.1;
+
+/// Upper bound on the faction of high outliers that take an unusually large
+/// amount of time to run
+const HIGH_OUTLIER_FRACTION: f64 = 0.01;
+
+/// Outlier inclusion tolerance on the high end of the plot's horizontal scale
+///
+/// The plot's horizontal scale will be grown by up to this factor in an attempt
+/// to include more of the high outliers into the plot.
+const HIGH_MARGIN: f64 = 0.1;
 
 /// Kernel density estimator for timing samples
 ///
@@ -82,16 +103,38 @@ impl KernelDensityEstimator {
     /// definition of this function will change to indicate an upper bound above
     /// which the kernel function will do nothing but slowly decay below a
     /// negligible fraction of its maximum value (probably 1%?).
+    #[allow(clippy::assertions_on_constants)]
     pub fn suggested_range(&self) -> RangeInclusive<f64> {
-        let (start, end) = self
-            .sorted_samples
-            .iter()
-            .zip(&self.kernel_bandwidths)
-            .map(|(pos, width)| (pos - width, pos + width))
-            .fold((f64::MAX, f64::MIN), |(min, max), (start, end)| {
-                (min.min(start.into_inner()), max.max(end.into_inner()))
-            });
-        start..=end
+        assert!((0.0..1.0).contains(&LOW_OUTLIER_FRACTION));
+        assert!((0.0..1.0).contains(&HIGH_OUTLIER_FRACTION));
+        assert!((0.0..1.0).contains(&(LOW_OUTLIER_FRACTION + HIGH_OUTLIER_FRACTION)));
+        assert!(LOW_MARGIN >= 0.0);
+        assert!(HIGH_MARGIN >= 0.0);
+
+        let samples_and_bandwidths = self.sorted_samples.iter().zip(&self.kernel_bandwidths);
+        let last_sample_idx = self.sorted_samples.len() - 1;
+        let first_reliable_idx = (LOW_OUTLIER_FRACTION * last_sample_idx as f64).floor() as usize;
+        let last_reliable_idx =
+            ((1.0 - HIGH_OUTLIER_FRACTION) * last_sample_idx as f64).floor() as usize;
+
+        let mut starts = samples_and_bandwidths
+            .clone()
+            .map(|(x, bw)| x - bw)
+            .collect::<Box<[_]>>();
+        starts.sort_unstable();
+        let first_reliable_start = starts[first_reliable_idx];
+        let start_dispersion = starts[last_reliable_idx] - first_reliable_start;
+        let suggested_start = first_reliable_start - start_dispersion * LOW_MARGIN;
+
+        let mut ends = samples_and_bandwidths
+            .map(|(x, bw)| x + bw)
+            .collect::<Box<[_]>>();
+        ends.sort_unstable();
+        let last_reliable_end = ends[last_reliable_idx];
+        let end_dispersion = last_reliable_end - ends[first_reliable_idx];
+        let suggested_end = last_reliable_end + end_dispersion * HIGH_MARGIN;
+
+        suggested_start.into_inner()..=suggested_end.into_inner()
     }
 
     /// Produce `num_points` regularly spaced samples of the kernel density
@@ -211,6 +254,11 @@ impl KernelDensitySampler {
         let rel_x_to_idx = last_idx as f64 / (x_end - x_start);
         debug!("Asked to sample a kernel density estimator over {num_points} points in range {horizontal_range:?} (horizontal step {})", 1.0 / rel_x_to_idx);
 
+        // Normalization factor to be applied to each kernel function's
+        // amplitude so that the integral of the kernel density estimator is
+        // equal to 1 as it should be.
+        let overall_norm = 1.0 / estimator.sorted_samples.len() as f64;
+
         // Determine which output data points are covered by the kernel
         // associated with each sample, and deduce at which output index we need
         // to start and stop taking each kernel into account while iterating
@@ -270,7 +318,7 @@ impl KernelDensitySampler {
             let kernel = KernelFunction {
                 sample_idx: sample_idx.into_inner(),
                 inv_bandwidth_as_idx,
-                inv_bandwidth_as_idx_times_3_over_4: 0.75 * inv_bandwidth_as_idx,
+                norm: 0.75 * inv_bandwidth_as_idx * overall_norm,
             };
 
             // Record at which output index the kernel function associated with
@@ -490,9 +538,14 @@ struct KernelFunction {
     /// Inverse of the kernel bandwidth in the space of output indices
     inv_bandwidth_as_idx: f64,
 
-    /// `inv_bandwidth_as_idx` multiplied by the 3/4 prefactor of the
-    /// Epanechnikov kernel function
-    inv_bandwidth_as_idx_times_3_over_4: f64,
+    /// Normalization factor that includes...
+    ///
+    /// - The 3/4 prefactor from the Epanechnikov kernel definition
+    /// - `inv_bandwidth_as_idx` to compensate for the change in kernel function
+    ///   integral that is caused by broadening or shrinking it.
+    /// - A 1/Nsamples factor so that the integral of the full kernel density
+    ///   estimator (which is the sum of all kernel functions) is 1.0.
+    norm: f64,
 }
 //
 impl KernelFunction {
@@ -503,7 +556,7 @@ impl KernelFunction {
         if cfg!(debug_assertions) && (u.abs() - 1.0 > 0.0) {
             warn!("Useless kernel function computation with out-of-range coordinate {u}");
         }
-        let result = self.inv_bandwidth_as_idx_times_3_over_4 * (1.0 + u) * (1.0 - u);
+        let result = self.norm * (1.0 + u) * (1.0 - u);
         result.max(0.0)
     }
 }
