@@ -1,13 +1,16 @@
 mod kernel_density_estimator;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use criterion::Throughput;
 use criterion_cbor::{DataDirectory, Search};
 use kernel_density_estimator::KernelDensityEstimator;
 use log::{debug, info};
 use ordered_float::NotNan;
 use plotters::prelude::*;
-use std::{path::Path, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 /// Plot width in pixels
 const PLOT_WIDTH: u32 = 1024;
@@ -25,17 +28,26 @@ fn main() -> Result<()> {
     // Set up logging
     env_logger::init();
 
-    // Locate workspace root
-    let mut workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    while !workspace_root.join("Cargo.lock").exists() {
-        workspace_root = workspace_root
-            .parent()
-            .context("Failed to locate workspace root")?;
-    }
+    // Locate target directory
+    let target_path = if let Some(path) = std::env::args().nth(1) {
+        let path = PathBuf::from(path);
+        ensure!(
+            path.exists(),
+            "Asked to operate on nonexistent target directory"
+        );
+        path
+    } else {
+        let mut workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        while !workspace_root.join("Cargo.lock").exists() {
+            workspace_root = workspace_root
+                .parent()
+                .context("Failed to locate workspace root")?;
+        }
+        workspace_root.join("target")
+    };
 
     // Determine where output data should be stored
-    let mut plots_root = workspace_root.to_owned();
-    plots_root.push("target");
+    let mut plots_root = target_path.to_owned();
     plots_root.push("plots");
     std::fs::create_dir_all(&plots_root).context("Failed to create output directory")?;
 
@@ -74,7 +86,7 @@ fn main() -> Result<()> {
     let mut kde_list = Vec::new();
     let mut kde_range_end = 0.0f64;
     //
-    for bench in Search::in_cargo_root(workspace_root).find_in_paths(benchmark_filter) {
+    for bench in Search::in_target_dir(target_path).find_in_paths(benchmark_filter) {
         // Check benchmark properties
         let bench = bench.context("Failed to enumerate benchmarks")?;
         info!(
