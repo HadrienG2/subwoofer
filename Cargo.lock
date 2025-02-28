@@ -923,6 +923,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "numerical-multiset"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "886588225c045afd38707076de6d4741e1fe1964f2d9772c3f7f05576e0d9061"
+
+[[package]]
 name = "once_cell"
 version = "1.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -990,6 +996,7 @@ dependencies = [
  "criterion-cbor",
  "env_logger",
  "log",
+ "numerical-multiset",
  "ordered-float",
  "plotters",
 ]

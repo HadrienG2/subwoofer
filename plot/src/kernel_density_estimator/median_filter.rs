@@ -1,9 +1,7 @@
 //! Median filter implementation
 
-mod ordered_multiset;
-
 use log::trace;
-use ordered_multiset::OrderedMultiset;
+use numerical_multiset::NumericalMultiset;
 use std::{
     cmp::Ordering,
     collections::VecDeque,
@@ -31,7 +29,7 @@ pub struct MedianFilter<T> {
     /// Used to count how many window elements are smaller than the median, and
     /// to replace the median with the largest of these elements when more than
     /// half of the window elements are located below the median.
-    below_median: OrderedMultiset<T>,
+    below_median: NumericalMultiset<T>,
 
     /// Current median window element
     median: T,
@@ -43,7 +41,7 @@ pub struct MedianFilter<T> {
     ///
     /// Plays the same role as `below_median`, but for window elements that are
     /// greater than the current median.
-    above_median: OrderedMultiset<T>,
+    above_median: NumericalMultiset<T>,
 }
 //
 impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
@@ -88,7 +86,7 @@ impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
         // Classify window elements as below median, median and above median
         let mut elements = sorted_window.into_vec().into_iter().peekable();
         //
-        let mut below_median = OrderedMultiset::new();
+        let mut below_median = NumericalMultiset::new();
         while let Some(elem) = elements.next_if(|&elem| elem < median) {
             below_median.insert(elem);
         }
@@ -98,7 +96,7 @@ impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
             num_median += 1;
         }
         //
-        let mut above_median = OrderedMultiset::new();
+        let mut above_median = NumericalMultiset::new();
         while let Some(elem) = elements.next_if(|&elem| elem > median) {
             above_median.insert(elem);
         }
@@ -185,7 +183,7 @@ impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
                         NonZeroUsize::new(self.num_median)
                             .expect("Median should have >1 element associated with it"),
                     );
-                    self.above_median.remove_all_min()
+                    self.above_median.pop_all_first()
                 } else {
                     None
                 }
@@ -202,7 +200,7 @@ impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
                     if let Some(num_median) = NonZeroUsize::new(self.num_median) {
                         self.above_median.insert_multiple(self.median, num_median);
                     }
-                    self.below_median.remove_all_max()
+                    self.below_median.pop_all_last()
                 } else {
                     None
                 }
@@ -223,7 +221,7 @@ impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
                     if let Some(num_median) = NonZeroUsize::new(self.num_median) {
                         self.below_median.insert_multiple(self.median, num_median);
                     }
-                    self.above_median.remove_all_min()
+                    self.above_median.pop_all_first()
                 } else {
                     None
                 }
@@ -246,7 +244,7 @@ impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
                         NonZeroUsize::new(self.num_median)
                             .expect("Median should have >1 element associated with it"),
                     );
-                    self.below_median.remove_all_max()
+                    self.below_median.pop_all_last()
                 } else {
                     None
                 }
@@ -306,10 +304,10 @@ impl<T: Copy + Debug + Display + Ord> MedianFilter<T> {
         debug_assert!(self.num_median > 0);
 
         // Check that the median meets expected ordering constraints
-        if let Some(max_below) = self.below_median.max() {
+        if let Some((max_below, _multiplicity)) = self.below_median.last() {
             debug_assert!(self.median > max_below);
         }
-        if let Some(min_above) = self.above_median.min() {
+        if let Some((min_above, _multiplicity)) = self.above_median.first() {
             debug_assert!(self.median < min_above);
         }
     }
