@@ -42,6 +42,7 @@ env_logger = "0.11"
 itertools = "0.14"
 log = "0.4"
 num-traits = "0.2"
+numerical-multiset = "1.0"
 ordered-float = "4.6"
 pessimize = { version = "2.0", features = ["nightly"] }
 plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "line_series", "point_series", "ttf"] }

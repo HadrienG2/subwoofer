@@ -15,6 +15,6 @@ criterion.workspace = true
 criterion-cbor.workspace = true
 env_logger.workspace = true
 log = { workspace = true, features = ["release_max_level_info"] }
-numerical-multiset = "1.0"
+numerical-multiset.workspace = true
 ordered-float.workspace = true
 plotters.workspace = true
