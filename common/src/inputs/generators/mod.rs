@@ -139,7 +139,7 @@ pub fn generate_input_pairs<Storage: InputsMut, R: Rng, const ILP: usize>(
 
         // Split the input in two halves
         let target_len = target.len();
-        assert_eq!(target_len % 2, 0);
+        assert!(target_len.is_multiple_of(2));
         let half_len = target_len / 2;
         let (left_target, right_target) = target.split_at_mut(half_len);
         assert_eq!(left_target.len(), right_target.len());
@@ -335,7 +335,7 @@ impl<'data, T> DataStream<'data, T> {
     pub fn into_pair_iter(
         self,
     ) -> impl DoubleEndedIterator<Item = [&'data mut T; 2]> + ExactSizeIterator {
-        assert_eq!(self.target.len() % 2, 0);
+        assert!(self.target.len().is_multiple_of(2));
         debug_assert!(self.stream_idx < self.num_streams);
 
         let half_len = self.target.len() / 2;
@@ -498,7 +498,7 @@ pub mod test_utils {
                             + (stream_idx < (sequence_len % num_streams)) as usize
                     };
                     let stream_len = if pairwise {
-                        assert_eq!(target_len % 2, 0);
+                        assert!(target_len.is_multiple_of(2));
                         stream_len(target_len / 2) * 2
                     } else {
                         stream_len(target_len)
@@ -623,7 +623,7 @@ pub(crate) mod tests {
         fn stream_pair_iter((num_streams, mut target) in num_streams_and_target::<u8>(true)) {
             let initial = target.clone();
             let target = &mut target[..];
-            debug_assert_eq!(target.len() % 2, 0);
+            debug_assert!(target.len().is_multiple_of(2));
             let half_len = target.len() / 2;
             let left_start = target.as_ptr();
             let right_start = left_start.wrapping_add(half_len);
@@ -839,7 +839,7 @@ pub(crate) mod tests {
             (num_streams, num_subnormals, target_len) in num_streams_and_subnormal_config(true),
         ) {
             // Set up a mock of the expected element_generator usage context
-            debug_assert_eq!(target_len % 2, 0);
+            debug_assert!(target_len.is_multiple_of(2));
             let half_len = target_len / 2;
             let mut rng = rand::thread_rng();
             if num_subnormals > target_len {
@@ -942,7 +942,7 @@ pub(crate) mod tests {
         pairs: bool,
     ) -> impl Strategy<Value = ([f32; INPUT_REGISTERS], usize)> {
         if pairs {
-            assert_eq!(INPUT_REGISTERS % 2, 0);
+            assert!(INPUT_REGISTERS.is_multiple_of(2));
         }
         (
             [any::<f32>(); INPUT_REGISTERS],
@@ -1168,7 +1168,7 @@ pub(crate) mod tests {
             prop_assert!(streams.len() >= expected_streams);
 
             // Check that the stream generators performed the expected actions
-            debug_assert_eq!(target.len() % 2, 0);
+            debug_assert!(target.len().is_multiple_of(2));
             let half_len = target.len() / 2;
             let min_pairs_per_stream = half_len / expected_streams;
             let mut actual_subnormals = 0;
@@ -1197,7 +1197,7 @@ pub(crate) mod tests {
 
                 // Check that the data element generation actions look correct
                 let mut expected_left_idx = stream_idx;
-                debug_assert_eq!(other_actions.len() % 2, 0);
+                debug_assert!(other_actions.len().is_multiple_of(2));
                 for action_pair in other_actions.chunks_exact(2) {
                     let expected_indices = [expected_left_idx, expected_left_idx + half_len];
                     for (action, expected_idx) in action_pair.iter().zip(expected_indices) {
