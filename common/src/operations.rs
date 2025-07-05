@@ -271,7 +271,7 @@ pub fn integrate_pairs<T: FloatLike, I: Inputs<Element = T>, const ILP: usize>(
 ) {
     let inputs = inputs.as_ref();
     let inputs_len = inputs.len();
-    assert_eq!(inputs_len % 2, 0);
+    assert!(inputs_len.is_multiple_of(2));
     let (left, right) = inputs.split_at(inputs_len / 2);
     if I::KIND.is_reused() {
         for (&left_elem, &right_elem) in left.iter().zip(right) {
@@ -830,7 +830,11 @@ pub mod test_utils {
 
         // Instantiate benchmark, checking for invalid input length
         let input_len_granularity = 1 + (pairwise as usize);
-        if input_storage.as_ref().len() % input_len_granularity != 0 {
+        if !input_storage
+            .as_ref()
+            .len()
+            .is_multiple_of(input_len_granularity)
+        {
             return assert_panics(AssertUnwindSafe(|| {
                 Op::make_benchmark::<_, ILP>(input_storage)
             }));
@@ -860,7 +864,7 @@ pub mod test_utils {
         let input_is_reused = Storage::KIND.is_reused();
 
         // Set up a benchmark...
-        if pairwise && input_len % 2 != 0 {
+        if pairwise && !input_len.is_multiple_of(2) {
             return assert_panics(AssertUnwindSafe(|| {
                 Op::make_benchmark::<_, ILP>(input_storage)
             }));
@@ -902,7 +906,7 @@ pub mod test_utils {
                 std::array::from_fn(input_is_normal)
             };
             if pairwise {
-                debug_assert_eq!(input_len % 2, 0);
+                debug_assert!(input_len.is_multiple_of(2));
                 let first_right_input = input_len / 2;
                 if input_is_reused {
                     first_input_normal = std::array::from_fn(|acc_idx| {
@@ -1409,7 +1413,7 @@ mod tests {
 
         // Test without reused input hiding
         let integrate_pairs = super::integrate_pairs::<f32, I, ILP>;
-        if initial_inputs.len() % 2 != 0 {
+        if !initial_inputs.len().is_multiple_of(2) {
             return assert_panics(AssertUnwindSafe(|| {
                 integrate_pairs(&mut accumulators, hide_accumulators, &inputs, iter)
             }));

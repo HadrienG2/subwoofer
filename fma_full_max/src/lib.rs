@@ -31,9 +31,8 @@ impl Operation for FmaFullMax {
     fn make_benchmark<Storage: InputsMut, const ILP: usize>(
         input_storage: Storage,
     ) -> impl Benchmark<Float = Storage::Element> {
-        assert_eq!(
-            input_storage.as_ref().len() % 2,
-            0,
+        assert!(
+            input_storage.as_ref().len().is_multiple_of(2),
             "Invalid test input length"
         );
         FmaFullMaxBenchmark::<_, ILP> {
@@ -507,7 +506,7 @@ mod tests {
             prop_assert_eq!(&stream.state, &FmaFullMaxState::Narrow);
 
             // Simulate the creation of a dataset, checking behavior
-            debug_assert_eq!(target.len() % 2, 0);
+            debug_assert!(target.len().is_multiple_of(2));
             let half_len = target.len() / 2;
             let stream_indices =
                 ((0..half_len).skip(stream_idx).step_by(num_streams))
@@ -690,7 +689,7 @@ mod tests {
         // Generate the inputs
         let mut rng = rand::thread_rng();
         let target_len = target.len();
-        if num_subnormals > target_len || target_len % 2 != 0 {
+        if num_subnormals > target_len || !target_len.is_multiple_of(2) {
             return assert_panics(AssertUnwindSafe(|| {
                 generate_inputs::<ILP>(num_subnormals, &mut target, &mut rng, true);
             }));
