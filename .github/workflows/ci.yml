@@ -100,9 +100,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up hwloc
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: Eeems-Org/apt-cache-action@v1
         with:
-          version: 1.0
           packages: libhwloc-dev libudev-dev
 
       - name: Set up Rust caching
@@ -188,9 +187,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up hwloc
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: Eeems-Org/apt-cache-action@v1
         with:
-          version: 1.0
           packages: libhwloc-dev libudev-dev
 
       # No caching here because the job does not run often enough
