@@ -417,11 +417,15 @@ where
         } else if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
             match WIDTH {
                 16 => {
-                    assert!(cfg!(target_feature = "avx512f"));
+                    const {
+                        assert!(cfg!(target_feature = "avx512f"));
+                    }
                     None
                 }
                 8 => {
-                    assert!(cfg!(target_feature = "avx"));
+                    const {
+                        assert!(cfg!(target_feature = "avx"));
+                    }
                     if cfg!(target_feature = "avx512f") {
                         NonZeroUsize::new(2)
                     } else {
@@ -429,7 +433,9 @@ where
                     }
                 }
                 4 => {
-                    assert!(cfg!(any(target_arch = "x86_64", target_feature = "sse")));
+                    const {
+                        assert!(cfg!(any(target_arch = "x86_64", target_feature = "sse")));
+                    }
                     if cfg!(target_feature = "avx") {
                         NonZeroUsize::new(2)
                     } else if cfg!(target_feature = "avx512f") {
@@ -524,11 +530,15 @@ where
         } else if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
             match WIDTH {
                 8 => {
-                    assert!(cfg!(target_feature = "avx512f"));
+                    const {
+                        assert!(cfg!(target_feature = "avx512f"));
+                    }
                     None
                 }
                 4 => {
-                    assert!(cfg!(target_feature = "avx"));
+                    const {
+                        assert!(cfg!(target_feature = "avx"));
+                    }
                     if cfg!(target_feature = "avx512f") {
                         NonZeroUsize::new(2)
                     } else {
@@ -536,7 +546,9 @@ where
                     }
                 }
                 2 => {
-                    assert!(cfg!(any(target_arch = "x86_64", target_feature = "sse2")));
+                    const {
+                        assert!(cfg!(any(target_arch = "x86_64", target_feature = "sse2")));
+                    }
                     if cfg!(target_feature = "avx") {
                         NonZeroUsize::new(2)
                     } else if cfg!(target_feature = "avx512f") {
@@ -666,10 +678,12 @@ pub fn subnormal_sampler<T: FloatLike, R: Rng>(extremal_bias: f32) -> impl Fn(&m
 ///   the point where non-extremal values are not exercized enough.
 pub fn suggested_extremal_bias(inside_test: bool, output_size: usize) -> f32 {
     if inside_test {
-        assert!(
-            cfg!(any(test, feature = "unstable_test")),
-            "extremal_bias is a testing feature and should not be enabled outside of unit tests"
-        );
+        const {
+            assert!(
+                cfg!(any(test, feature = "unstable_test")),
+                "extremal_bias is a testing feature and should not be enabled outside of unit tests"
+            );
+        }
         let min_extremal_bias = 0.05;
         let max_extremal_bias = 0.25;
         let output_size = output_size as f64;
